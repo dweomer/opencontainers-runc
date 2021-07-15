@@ -68,11 +68,6 @@ function runc_spec() {
 	if [[ "$ROOTLESS" -ne 0 ]] && [[ "$ROOTLESS_FEATURES" == *"idmap"* ]]; then
 		runc_rootless_idmap "$bundle"
 	fi
-
-	# Ensure config.json contains linux.resources
-	if [[ "$ROOTLESS" -ne 0 ]] && [[ "$ROOTLESS_FEATURES" == *"cgroup"* ]]; then
-		runc_rootless_cgroup "$bundle"
-	fi
 }
 
 # Helper function to reformat config.json file. Input uses jq syntax.
@@ -92,12 +87,6 @@ function runc_rootless_idmap() {
 			| .linux.gidMappings += [{"hostID": '"$(($ROOTLESS_GIDMAP_START + 100))"', "containerID": 1000, "size": '"$(($ROOTLESS_GIDMAP_LENGTH - 1000))"'}]' $bundle
 }
 
-# Shortcut to add empty resources as part of a rootless configuration.
-function runc_rootless_cgroup() {
-	bundle="${1:-.}"
-	update_config '.linux.resources += {"memory":{},"cpu":{},"blockio":{},"pids":{}}' $bundle
-}
-
 # Returns systemd version as a number (-1 if systemd is not enabled/supported).
 function systemd_version() {
 	if [ -n "${RUNC_USE_SYSTEMD}" ]; then
@@ -114,13 +103,21 @@ function init_cgroup_paths() {
 
 	if stat -f -c %t /sys/fs/cgroup | grep -qFw 63677270; then
 		CGROUP_UNIFIED=yes
+		local controllers="/sys/fs/cgroup/cgroup.controllers"
+		# For rootless + systemd case, controllers delegation is required,
+		# so check the controllers that the current user has, not the top one.
+		# NOTE: delegation of cpuset requires systemd >= 244 (Fedora >= 32, Ubuntu >= 20.04).
+		if [[ "$ROOTLESS" -ne 0 && -n "$RUNC_USE_SYSTEMD" ]]; then
+			controllers="/sys/fs/cgroup/user.slice/user-$(id -u).slice/user@$(id -u).service/cgroup.controllers"
+		fi
+
 		# "pseudo" controllers do not appear in /sys/fs/cgroup/cgroup.controllers.
 		# - devices (since kernel 4.15) we must assume to be supported because
 		#   it's quite hard to test.
 		# - freezer (since kernel 5.2) we can auto-detect by looking for the
 		#   "cgroup.freeze" file a *non-root* cgroup.
 		CGROUP_SUBSYSTEMS=$(
-			cat /sys/fs/cgroup/cgroup.controllers
+			cat "$controllers"
 			echo devices
 		)
 		CGROUP_BASE_PATH=/sys/fs/cgroup
@@ -171,10 +168,9 @@ function set_cgroups_path() {
 	update_config '.linux.cgroupsPath |= "'"${OCI_CGROUPS_PATH}"'"' "$bundle"
 }
 
-# Helper to check a value in cgroups.
-function check_cgroup_value() {
+# Get a value from a cgroup file.
+function get_cgroup_value() {
 	local source=$1
-	local expected=$2
 	local cgroup var current
 
 	if [ "x$CGROUP_UNIFIED" = "xyes" ]; then
@@ -184,9 +180,15 @@ function check_cgroup_value() {
 		var=CGROUP_${var^^}_BASE_PATH # variable name (e.g. CGROUP_MEMORY_BASE_PATH)
 		eval cgroup=\$${var}${REL_CGROUPS_PATH}
 	fi
+	cat $cgroup/$source
+}
 
-	current=$(cat $cgroup/$source)
-	echo $cgroup/$source
+# Helper to check a if value in a cgroup file matches the expected one.
+function check_cgroup_value() {
+	local current
+	current="$(get_cgroup_value $1)"
+	local expected=$2
+
 	echo "current" $current "!?" "$expected"
 	[ "$current" = "$expected" ]
 }
@@ -274,6 +276,11 @@ function fail() {
 	exit 1
 }
 
+# Check whether rootless runc can use cgroups.
+function rootless_cgroup() {
+	[[ "$ROOTLESS_FEATURES" == *"cgroup"* || -n "$RUNC_USE_SYSTEMD" ]]
+}
+
 # Allows a test to specify what things it requires. If the environment can't
 # support it, the test is skipped with a message.
 function requires() {
@@ -301,23 +308,17 @@ function requires() {
 			fi
 			;;
 		rootless_cgroup)
-			if [[ "$ROOTLESS_FEATURES" != *"cgroup"* ]]; then
+			if ! rootless_cgroup; then
 				skip_me=1
 			fi
 			;;
 		rootless_no_cgroup)
-			if [[ "$ROOTLESS_FEATURES" == *"cgroup"* ]]; then
+			if rootless_cgroup; then
 				skip_me=1
 			fi
 			;;
 		rootless_no_features)
 			if [ "$ROOTLESS_FEATURES" != "" ]; then
-				skip_me=1
-			fi
-			;;
-		cgroups_freezer)
-			init_cgroup_paths
-			if [[ "$CGROUP_SUBSYSTEMS" != *"freezer"* ]]; then
 				skip_me=1
 			fi
 			;;
@@ -347,6 +348,13 @@ function requires() {
 		cgroups_v2)
 			init_cgroup_paths
 			if [ "$CGROUP_UNIFIED" != "yes" ]; then
+				skip_me=1
+			fi
+			;;
+		cgroups_*)
+			init_cgroup_paths
+			var=${var#cgroups_}
+			if [[ "$CGROUP_SUBSYSTEMS" != *"$var"* ]]; then
 				skip_me=1
 			fi
 			;;

@@ -13,12 +13,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
+	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/configs"
 )
 
 func init() {
-	fscommon.TestMode = true
+	cgroups.TestMode = true
 }
 
 type cgroupTestUtil struct {
@@ -50,7 +50,7 @@ func NewCgroupTestUtil(subsystem string, t *testing.T) *cgroupTestUtil {
 	}
 
 	// Ensure the full mock cgroup path exists.
-	err = os.MkdirAll(testCgroupPath, 0755)
+	err = os.MkdirAll(testCgroupPath, 0o755)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +64,7 @@ func (c *cgroupTestUtil) cleanup() {
 // Write the specified contents on the mock of the specified cgroup files.
 func (c *cgroupTestUtil) writeFileContents(fileContents map[string]string) {
 	for file, contents := range fileContents {
-		err := fscommon.WriteFile(c.CgroupPath, file, contents)
+		err := cgroups.WriteFile(c.CgroupPath, file, contents)
 		if err != nil {
 			c.t.Fatal(err)
 		}

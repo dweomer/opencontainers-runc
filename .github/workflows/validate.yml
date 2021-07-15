@@ -5,6 +5,7 @@ on:
       - v*
     branches:
       - master
+      - release-*
   pull_request:
 
 jobs:
@@ -20,9 +21,7 @@ jobs:
       - uses: golangci/golangci-lint-action@v2
         with:
           # must be specified without patch version
-          version: v1.36
-          # Only show new issues for a pull request.
-          only-new-issues: true
+          version: v1.40
 
   shfmt:
     runs-on: ubuntu-20.04
@@ -30,7 +29,7 @@ jobs:
     - uses: actions/checkout@v2
     - name: vars
       run: |
-        echo "VERSION=3.2.0" >> $GITHUB_ENV
+        echo "VERSION=3.2.4" >> $GITHUB_ENV
         echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
     - name: cache go mod and $GOCACHE
       uses: actions/cache@v2
@@ -53,9 +52,9 @@ jobs:
       - uses: actions/checkout@v2
       - name: vars
         run: |
-          echo 'VERSION=v0.7.1' >> $GITHUB_ENV
+          echo 'VERSION=v0.7.2' >> $GITHUB_ENV
           echo 'BASEURL=https://github.com/koalaman/shellcheck/releases/download' >> $GITHUB_ENV
-          echo 'SHA256SUM=1e8499d6f90481bfa2af7a4dce86dd9bcba5c0fbd88bf4793b34ec679c8bb98a' >> $GITHUB_ENV
+          echo 'SHA256SUM=12ee2e0b90a3d1e9cae24ac9b2838be66b48573cb2c8e8f3c566b959df6f050c' >> $GITHUB_ENV
           echo ~/bin >> $GITHUB_PATH
       - name: install shellcheck
         run: |
@@ -93,7 +92,7 @@ jobs:
     steps:
       - name: get pr commits
         id: 'get-pr-commits'
-        uses: tim-actions/get-pr-commits@v1.0.0
+        uses: tim-actions/get-pr-commits@v1.1.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 

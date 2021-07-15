@@ -48,7 +48,7 @@ func TestHugetlbSetHugetlb(t *testing.T) {
 			},
 		}
 		hugetlb := &HugetlbGroup{}
-		if err := hugetlb.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+		if err := hugetlb.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -57,7 +57,7 @@ func TestHugetlbSetHugetlb(t *testing.T) {
 		limit := fmt.Sprintf(limit, pageSize)
 		value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, limit)
 		if err != nil {
-			t.Fatalf("Failed to parse %s - %s", limit, err)
+			t.Fatal(err)
 		}
 		if value != hugetlbAfter {
 			t.Fatalf("Set hugetlb.limit_in_bytes failed. Expected: %v, Got: %v", hugetlbAfter, value)

@@ -15,9 +15,9 @@ import (
 	"github.com/urfave/cli"
 )
 
-// version will be populated by the Makefile, read from
-// VERSION file of the source code.
-var version = ""
+// version must be set from the contents of VERSION file by go build's
+// -X main.version= option in the Makefile.
+var version = "unknown"
 
 // gitCommit will be the hash that the binary was built from
 // and will be populated by the Makefile
@@ -55,10 +55,8 @@ func main() {
 	app.Name = "runc"
 	app.Usage = usage
 
-	var v []string
-	if version != "" {
-		v = append(v, version)
-	}
+	v := []string{version}
+
 	if gitCommit != "" {
 		v = append(v, "commit: "+gitCommit)
 	}
@@ -83,17 +81,17 @@ func main() {
 	app.Flags = []cli.Flag{
 		cli.BoolFlag{
 			Name:  "debug",
-			Usage: "enable debug output for logging",
+			Usage: "enable debug logging",
 		},
 		cli.StringFlag{
 			Name:  "log",
 			Value: "",
-			Usage: "set the log file path where internal debug information is written",
+			Usage: "set the log file to write runc logs to (default is '/dev/stderr')",
 		},
 		cli.StringFlag{
 			Name:  "log-format",
 			Value: "text",
-			Usage: "set the format used by logs ('text' (default), or 'json')",
+			Usage: "set the log format ('text' (default), or 'json')",
 		},
 		cli.StringFlag{
 			Name:  "root",
@@ -139,7 +137,7 @@ func main() {
 			// According to the XDG specification, we need to set anything in
 			// XDG_RUNTIME_DIR to have a sticky bit if we don't want it to get
 			// auto-pruned.
-			if err := os.MkdirAll(root, 0700); err != nil {
+			if err := os.MkdirAll(root, 0o700); err != nil {
 				fmt.Fprintln(os.Stderr, "the path in $XDG_RUNTIME_DIR must be writable by the user")
 				fatal(err)
 			}
@@ -190,6 +188,7 @@ func createLogConfig(context *cli.Context) logs.Config {
 		LogLevel:    logrus.InfoLevel,
 		LogFilePath: logFilePath,
 		LogFormat:   context.GlobalString("log-format"),
+		LogCaller:   context.GlobalBool("debug"),
 	}
 	if context.GlobalBool("debug") {
 		config.LogLevel = logrus.DebugLevel

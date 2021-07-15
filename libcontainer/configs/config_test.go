@@ -145,12 +145,15 @@ func TestFuncHookRun(t *testing.T) {
 
 	fHook := configs.NewFunctionHook(func(s *specs.State) error {
 		if !reflect.DeepEqual(state, s) {
-			t.Errorf("Expected state %+v to equal %+v", state, s)
+			return fmt.Errorf("expected state %+v to equal %+v", state, s)
 		}
 		return nil
 	})
 
-	fHook.Run(state)
+	err := fHook.Run(state)
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestCommandHookRun(t *testing.T) {
@@ -187,7 +190,7 @@ exit 0
 	verifyCommand := fmt.Sprintf(verifyCommandTemplate, stateJson)
 	filename := "/tmp/runc-hooktest.sh"
 	os.Remove(filename)
-	if err := ioutil.WriteFile(filename, []byte(verifyCommand), 0700); err != nil {
+	if err := ioutil.WriteFile(filename, []byte(verifyCommand), 0o700); err != nil {
 		t.Fatalf("Failed to create tmp file: %v", err)
 	}
 	defer os.Remove(filename)

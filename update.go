@@ -93,12 +93,14 @@ other options are ignored.
 			Usage: "Memory node(s) to use",
 		},
 		cli.StringFlag{
-			Name:  "kernel-memory",
-			Usage: "(obsoleted; do not use)",
+			Name:   "kernel-memory",
+			Usage:  "(obsoleted; do not use)",
+			Hidden: true,
 		},
 		cli.StringFlag{
-			Name:  "kernel-memory-tcp",
-			Usage: "(obsoleted; do not use)",
+			Name:   "kernel-memory-tcp",
+			Usage:  "(obsoleted; do not use)",
+			Hidden: true,
 		},
 		cli.StringFlag{
 			Name:  "memory",
@@ -203,7 +205,7 @@ other options are ignored.
 					var err error
 					*pair.dest, err = strconv.ParseUint(val, 10, 64)
 					if err != nil {
-						return fmt.Errorf("invalid value for %s: %s", pair.opt, err)
+						return fmt.Errorf("invalid value for %s: %w", pair.opt, err)
 					}
 				}
 			}
@@ -219,7 +221,7 @@ other options are ignored.
 					var err error
 					*pair.dest, err = strconv.ParseInt(val, 10, 64)
 					if err != nil {
-						return fmt.Errorf("invalid value for %s: %s", pair.opt, err)
+						return fmt.Errorf("invalid value for %s: %w", pair.opt, err)
 					}
 				}
 			}
@@ -239,7 +241,7 @@ other options are ignored.
 					if val != "-1" {
 						v, err = units.RAMInBytes(val)
 						if err != nil {
-							return fmt.Errorf("invalid value for %s: %s", pair.opt, err)
+							return fmt.Errorf("invalid value for %s: %w", pair.opt, err)
 						}
 					} else {
 						v = -1
@@ -286,7 +288,7 @@ other options are ignored.
 		}
 
 		config.Cgroups.Resources.CpuShares = *r.CPU.Shares
-		//CpuWeight is used for cgroupv2 and should be converted
+		// CpuWeight is used for cgroupv2 and should be converted
 		config.Cgroups.Resources.CpuWeight = cgroups.ConvertCPUSharesToCgroupV2Value(*r.CPU.Shares)
 		config.Cgroups.Resources.CpuRtPeriod = *r.CPU.RealtimePeriod
 		config.Cgroups.Resources.CpuRtRuntime = *r.CPU.RealtimeRuntime
@@ -328,6 +330,13 @@ other options are ignored.
 			config.IntelRdt.L3CacheSchema = l3CacheSchema
 			config.IntelRdt.MemBwSchema = memBwSchema
 		}
+
+		// XXX(kolyshkin@): currently "runc update" is unable to change
+		// device configuration, so add this to skip device update.
+		// This helps in case an extra plugin (nvidia GPU) applies some
+		// configuration on top of what runc does.
+		// Note this field is not saved into container's state.json.
+		config.Cgroups.SkipDevices = true
 
 		return container.Set(config)
 	},

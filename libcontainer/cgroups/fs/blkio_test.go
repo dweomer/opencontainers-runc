@@ -171,62 +171,80 @@ func appendBlkioStatEntry(blkioStatEntries *[]cgroups.BlkioStatEntry, major, min
 }
 
 func TestBlkioSetWeight(t *testing.T) {
-	helper := NewCgroupTestUtil("blkio", t)
-	defer helper.cleanup()
-
 	const (
 		weightBefore = 100
 		weightAfter  = 200
 	)
 
-	helper.writeFileContents(map[string]string{
-		"blkio.weight": strconv.Itoa(weightBefore),
-	})
-
-	helper.CgroupData.config.Resources.BlkioWeight = weightAfter
-	blkio := &BlkioGroup{}
-	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
-		t.Fatal(err)
-	}
-
-	value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, "blkio.weight")
-	if err != nil {
-		t.Fatalf("Failed to parse blkio.weight - %s", err)
-	}
-
-	if value != weightAfter {
-		t.Fatal("Got the wrong value, set blkio.weight failed.")
+	for _, legacyIOScheduler := range []bool{false, true} {
+		// Populate cgroup
+		helper := NewCgroupTestUtil("blkio", t)
+		defer helper.cleanup()
+		weightFilename := "blkio.bfq.weight"
+		if legacyIOScheduler {
+			weightFilename = "blkio.weight"
+		}
+		helper.writeFileContents(map[string]string{
+			weightFilename: strconv.Itoa(weightBefore),
+		})
+		// Apply new configuration
+		helper.CgroupData.config.Resources.BlkioWeight = weightAfter
+		blkio := &BlkioGroup{}
+		if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
+			t.Fatal(err)
+		}
+		// Verify results
+		if weightFilename != blkio.weightFilename {
+			t.Fatalf("weight filename detection failed: expected %q, detected %q", weightFilename, blkio.weightFilename)
+		}
+		value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, weightFilename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value != weightAfter {
+			t.Fatalf("Got the wrong value, set %s failed.", weightFilename)
+		}
 	}
 }
 
 func TestBlkioSetWeightDevice(t *testing.T) {
-	helper := NewCgroupTestUtil("blkio", t)
-	defer helper.cleanup()
-
 	const (
 		weightDeviceBefore = "8:0 400"
 	)
 
-	wd := configs.NewWeightDevice(8, 0, 500, 0)
-	weightDeviceAfter := wd.WeightString()
-
-	helper.writeFileContents(map[string]string{
-		"blkio.weight_device": weightDeviceBefore,
-	})
-
-	helper.CgroupData.config.Resources.BlkioWeightDevice = []*configs.WeightDevice{wd}
-	blkio := &BlkioGroup{}
-	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
-		t.Fatal(err)
-	}
-
-	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "blkio.weight_device")
-	if err != nil {
-		t.Fatalf("Failed to parse blkio.weight_device - %s", err)
-	}
-
-	if value != weightDeviceAfter {
-		t.Fatal("Got the wrong value, set blkio.weight_device failed.")
+	for _, legacyIOScheduler := range []bool{false, true} {
+		// Populate cgroup
+		helper := NewCgroupTestUtil("blkio", t)
+		defer helper.cleanup()
+		weightFilename := "blkio.bfq.weight"
+		weightDeviceFilename := "blkio.bfq.weight_device"
+		if legacyIOScheduler {
+			weightFilename = "blkio.weight"
+			weightDeviceFilename = "blkio.weight_device"
+		}
+		helper.writeFileContents(map[string]string{
+			weightFilename:       "",
+			weightDeviceFilename: weightDeviceBefore,
+		})
+		// Apply new configuration
+		wd := configs.NewWeightDevice(8, 0, 500, 0)
+		weightDeviceAfter := wd.WeightString()
+		helper.CgroupData.config.Resources.BlkioWeightDevice = []*configs.WeightDevice{wd}
+		blkio := &BlkioGroup{}
+		if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
+			t.Fatal(err)
+		}
+		// Verify results
+		if weightDeviceFilename != blkio.weightDeviceFilename {
+			t.Fatalf("weight_device filename detection failed: expected %q, detected %q", weightDeviceFilename, blkio.weightDeviceFilename)
+		}
+		value, err := fscommon.GetCgroupParamString(helper.CgroupPath, weightDeviceFilename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if value != weightDeviceAfter {
+			t.Fatalf("Got the wrong value, set %s failed.", weightDeviceFilename)
+		}
 	}
 }
 
@@ -247,23 +265,26 @@ func TestBlkioSetMultipleWeightDevice(t *testing.T) {
 	// is present will suffice for the test to ensure multiple writes are done.
 	weightDeviceAfter := wd2.WeightString()
 
+	blkio := &BlkioGroup{}
+	blkio.detectWeightFilenames(helper.CgroupPath)
+	if blkio.weightDeviceFilename != "blkio.bfq.weight_device" {
+		t.Fatalf("when blkio controller is unavailable, expected to use \"blkio.bfq.weight_device\", tried to use %q", blkio.weightDeviceFilename)
+	}
 	helper.writeFileContents(map[string]string{
-		"blkio.weight_device": weightDeviceBefore,
+		blkio.weightDeviceFilename: weightDeviceBefore,
 	})
 
 	helper.CgroupData.config.Resources.BlkioWeightDevice = []*configs.WeightDevice{wd1, wd2}
-	blkio := &BlkioGroup{}
-	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
-	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "blkio.weight_device")
+	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, blkio.weightDeviceFilename)
 	if err != nil {
-		t.Fatalf("Failed to parse blkio.weight_device - %s", err)
+		t.Fatal(err)
 	}
-
 	if value != weightDeviceAfter {
-		t.Fatal("Got the wrong value, set blkio.weight_device failed.")
+		t.Fatalf("Got the wrong value, set %s failed.", blkio.weightDeviceFilename)
 	}
 }
 
@@ -459,7 +480,6 @@ func TestBlkioStatsNoFilesBFQDebug(t *testing.T) {
 		cpuset := &CpusetGroup{}
 		actualStats := *cgroups.NewStats()
 		err := cpuset.GetStats(helper.CgroupPath, &actualStats)
-
 		if err != nil {
 			t.Errorf(fmt.Sprintf("test case '%s' failed unexpectedly: %s", testCase.desc, err))
 		}
@@ -576,7 +596,6 @@ func TestBlkioStatsNoFilesCFQ(t *testing.T) {
 		cpuset := &CpusetGroup{}
 		actualStats := *cgroups.NewStats()
 		err := cpuset.GetStats(helper.CgroupPath, &actualStats)
-
 		if err != nil {
 			t.Errorf(fmt.Sprintf("test case '%s' failed unexpectedly: %s", testCase.desc, err))
 		}
@@ -746,19 +765,19 @@ func TestBlkioSetThrottleReadBpsDevice(t *testing.T) {
 
 	helper.CgroupData.config.Resources.BlkioThrottleReadBpsDevice = []*configs.ThrottleDevice{td}
 	blkio := &BlkioGroup{}
-	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "blkio.throttle.read_bps_device")
 	if err != nil {
-		t.Fatalf("Failed to parse blkio.throttle.read_bps_device - %s", err)
+		t.Fatal(err)
 	}
-
 	if value != throttleAfter {
 		t.Fatal("Got the wrong value, set blkio.throttle.read_bps_device failed.")
 	}
 }
+
 func TestBlkioSetThrottleWriteBpsDevice(t *testing.T) {
 	helper := NewCgroupTestUtil("blkio", t)
 	defer helper.cleanup()
@@ -776,19 +795,19 @@ func TestBlkioSetThrottleWriteBpsDevice(t *testing.T) {
 
 	helper.CgroupData.config.Resources.BlkioThrottleWriteBpsDevice = []*configs.ThrottleDevice{td}
 	blkio := &BlkioGroup{}
-	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "blkio.throttle.write_bps_device")
 	if err != nil {
-		t.Fatalf("Failed to parse blkio.throttle.write_bps_device - %s", err)
+		t.Fatal(err)
 	}
-
 	if value != throttleAfter {
 		t.Fatal("Got the wrong value, set blkio.throttle.write_bps_device failed.")
 	}
 }
+
 func TestBlkioSetThrottleReadIOpsDevice(t *testing.T) {
 	helper := NewCgroupTestUtil("blkio", t)
 	defer helper.cleanup()
@@ -806,19 +825,19 @@ func TestBlkioSetThrottleReadIOpsDevice(t *testing.T) {
 
 	helper.CgroupData.config.Resources.BlkioThrottleReadIOPSDevice = []*configs.ThrottleDevice{td}
 	blkio := &BlkioGroup{}
-	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "blkio.throttle.read_iops_device")
 	if err != nil {
-		t.Fatalf("Failed to parse blkio.throttle.read_iops_device - %s", err)
+		t.Fatal(err)
 	}
-
 	if value != throttleAfter {
 		t.Fatal("Got the wrong value, set blkio.throttle.read_iops_device failed.")
 	}
 }
+
 func TestBlkioSetThrottleWriteIOpsDevice(t *testing.T) {
 	helper := NewCgroupTestUtil("blkio", t)
 	defer helper.cleanup()
@@ -836,15 +855,14 @@ func TestBlkioSetThrottleWriteIOpsDevice(t *testing.T) {
 
 	helper.CgroupData.config.Resources.BlkioThrottleWriteIOPSDevice = []*configs.ThrottleDevice{td}
 	blkio := &BlkioGroup{}
-	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := blkio.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "blkio.throttle.write_iops_device")
 	if err != nil {
-		t.Fatalf("Failed to parse blkio.throttle.write_iops_device - %s", err)
+		t.Fatal(err)
 	}
-
 	if value != throttleAfter {
 		t.Fatal("Got the wrong value, set blkio.throttle.write_iops_device failed.")
 	}

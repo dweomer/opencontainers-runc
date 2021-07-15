@@ -11,17 +11,19 @@ import (
 	"testing"
 
 	"github.com/opencontainers/runc/libcontainer"
+	"golang.org/x/sys/unix"
 )
 
-func showFile(t *testing.T, fname string) error {
+func showFile(t *testing.T, fname string) {
+	t.Helper()
 	t.Logf("=== %s ===\n", fname)
 
 	f, err := os.Open(fname)
 	if err != nil {
 		t.Log(err)
-		return err
+		return
 	}
-	defer f.Close()
+	defer f.Close() //nolint: errcheck
 
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
@@ -29,17 +31,16 @@ func showFile(t *testing.T, fname string) error {
 	}
 
 	if err := scanner.Err(); err != nil {
-		return err
+		t.Log(err)
+		return
 	}
 
 	t.Logf("=== END ===\n")
-
-	return nil
 }
 
 func TestUsernsCheckpoint(t *testing.T) {
 	if _, err := os.Stat("/proc/self/ns/user"); os.IsNotExist(err) {
-		t.Skip("userns is unsupported")
+		t.Skip("Test requires userns.")
 	}
 	cmd := exec.Command("criu", "check", "--feature", "userns")
 	if err := cmd.Run(); err != nil {
@@ -62,37 +63,26 @@ func testCheckpoint(t *testing.T, userns bool) {
 	}
 
 	root, err := newTestRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(root)
+	ok(t, err)
+	defer remove(root)
 
 	rootfs, err := newRootfs()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 	defer remove(rootfs)
 
-	config := newTemplateConfig(&tParam{
+	config := newTemplateConfig(t, &tParam{
 		rootfs: rootfs,
 		userns: userns,
 	})
 	factory, err := libcontainer.New(root, libcontainer.Cgroupfs)
-
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	container, err := factory.Create("test", config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer container.Destroy()
+	ok(t, err)
+	defer destroyContainer(container)
 
 	stdinR, stdinW, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	var stdout bytes.Buffer
 
@@ -106,27 +96,19 @@ func testCheckpoint(t *testing.T, userns bool) {
 	}
 
 	err = container.Run(&pconfig)
-	stdinR.Close()
-	defer stdinW.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
+	_ = stdinR.Close()
+	defer stdinW.Close() //nolint: errcheck
+	ok(t, err)
 
 	pid, err := pconfig.Pid()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	process, err := os.FindProcess(pid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	parentDir, err := ioutil.TempDir("", "criu-parent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(parentDir)
+	ok(t, err)
+	defer remove(parentDir)
 
 	preDumpOpts := &libcontainer.CriuOpts{
 		ImagesDirectory: parentDir,
@@ -141,19 +123,15 @@ func testCheckpoint(t *testing.T, userns bool) {
 	}
 
 	state, err := container.Status()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	if state != libcontainer.Running {
 		t.Fatal("Unexpected preDump state: ", state)
 	}
 
 	imagesDir, err := ioutil.TempDir("", "criu")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(imagesDir)
+	ok(t, err)
+	defer remove(imagesDir)
 
 	checkpointOpts := &libcontainer.CriuOpts{
 		ImagesDirectory: imagesDir,
@@ -169,30 +147,22 @@ func testCheckpoint(t *testing.T, userns bool) {
 	}
 
 	state, err = container.Status()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	if state != libcontainer.Stopped {
 		t.Fatal("Unexpected state checkpoint: ", state)
 	}
 
-	stdinW.Close()
+	_ = stdinW.Close()
 	_, err = process.Wait()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	// reload the container
 	container, err = factory.Load("test")
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	restoreStdinR, restoreStdinW, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	var restoreStdout bytes.Buffer
 	restoreProcessConfig := &libcontainer.Process{
@@ -203,45 +173,30 @@ func testCheckpoint(t *testing.T, userns bool) {
 	}
 
 	err = container.Restore(restoreProcessConfig, checkpointOpts)
-	restoreStdinR.Close()
-	defer restoreStdinW.Close()
+	_ = restoreStdinR.Close()
+	defer restoreStdinW.Close() //nolint: errcheck
 	if err != nil {
 		showFile(t, restoreLog)
 		t.Fatal(err)
 	}
 
 	state, err = container.Status()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 	if state != libcontainer.Running {
 		t.Fatal("Unexpected restore state: ", state)
 	}
 
 	pid, err = restoreProcessConfig.Pid()
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
-	_, err = os.FindProcess(pid)
-	if err != nil {
-		t.Fatal(err)
-	}
+	err = unix.Kill(pid, 0)
+	ok(t, err)
 
 	_, err = restoreStdinW.WriteString("Hello!")
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
-	restoreStdinW.Close()
-	s, err := restoreProcessConfig.Wait()
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if !s.Success() {
-		t.Fatal(s.String(), pid)
-	}
+	_ = restoreStdinW.Close()
+	waitProcess(restoreProcessConfig, t)
 
 	output := restoreStdout.String()
 	if !strings.Contains(output, "Hello!") {

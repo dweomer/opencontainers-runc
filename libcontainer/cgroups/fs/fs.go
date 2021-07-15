@@ -3,17 +3,18 @@
 package fs
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
 	"github.com/opencontainers/runc/libcontainer/configs"
 	libcontainerUtils "github.com/opencontainers/runc/libcontainer/utils"
-	"github.com/pkg/errors"
-	"golang.org/x/sys/unix"
 )
 
 var (
@@ -44,8 +45,8 @@ type subsystem interface {
 	GetStats(path string, stats *cgroups.Stats) error
 	// Creates and joins the cgroup represented by 'cgroupData'.
 	Apply(path string, c *cgroupData) error
-	// Set the cgroup represented by cgroup.
-	Set(path string, cgroup *configs.Cgroup) error
+	// Set sets the cgroup resources.
+	Set(path string, r *configs.Resources) error
 }
 
 type manager struct {
@@ -64,8 +65,10 @@ func NewManager(cg *configs.Cgroup, paths map[string]string, rootless bool) cgro
 }
 
 // The absolute path to the root of the cgroup hierarchies.
-var cgroupRootLock sync.Mutex
-var cgroupRoot string
+var (
+	cgroupRootLock sync.Mutex
+	cgroupRoot     string
+)
 
 const defaultCgroupRoot = "/sys/fs/cgroup"
 
@@ -169,8 +172,6 @@ func isIgnorableError(rootless bool, err error) bool {
 	if !rootless {
 		return false
 	}
-	// TODO: rm errors.Cause once we switch to %w everywhere
-	err = errors.Cause(err)
 	// Is it an ordinary EPERM?
 	if errors.Is(err, os.ErrPermission) {
 		return true
@@ -274,8 +275,8 @@ func (m *manager) GetStats() (*cgroups.Stats, error) {
 	return stats, nil
 }
 
-func (m *manager) Set(container *configs.Config) error {
-	if container.Cgroups == nil {
+func (m *manager) Set(r *configs.Resources) error {
+	if r == nil {
 		return nil
 	}
 
@@ -284,7 +285,7 @@ func (m *manager) Set(container *configs.Config) error {
 	if m.cgroups != nil && m.cgroups.Paths != nil {
 		return nil
 	}
-	if container.Cgroups.Resources.Unified != nil {
+	if r.Unified != nil {
 		return cgroups.ErrV1NoUnified
 	}
 
@@ -292,7 +293,7 @@ func (m *manager) Set(container *configs.Config) error {
 	defer m.mu.Unlock()
 	for _, sys := range subsystems {
 		path := m.paths[sys.Name()]
-		if err := sys.Set(path, container.Cgroups); err != nil {
+		if err := sys.Set(path, r); err != nil {
 			if m.rootless && sys.Name() == "devices" {
 				continue
 			}
@@ -322,7 +323,7 @@ func (m *manager) Freeze(state configs.FreezerState) error {
 	prevState := m.cgroups.Resources.Freezer
 	m.cgroups.Resources.Freezer = state
 	freezer := &FreezerGroup{}
-	if err := freezer.Set(path, m.cgroups); err != nil {
+	if err := freezer.Set(path, m.cgroups.Resources); err != nil {
 		m.cgroups.Resources.Freezer = prevState
 		return err
 	}
@@ -393,7 +394,7 @@ func join(path string, pid int) error {
 	if path == "" {
 		return nil
 	}
-	if err := os.MkdirAll(path, 0755); err != nil {
+	if err := os.MkdirAll(path, 0o755); err != nil {
 		return err
 	}
 	return cgroups.WriteCgroupProc(path, pid)

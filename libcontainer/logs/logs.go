@@ -3,12 +3,12 @@ package logs
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"sync"
 
-	"github.com/pkg/errors"
 	"github.com/sirupsen/logrus"
 )
 
@@ -24,6 +24,7 @@ type Config struct {
 	LogFormat   string
 	LogFilePath string
 	LogPipeFd   int
+	LogCaller   bool
 }
 
 func ForwardLogs(logPipe io.ReadCloser) chan error {
@@ -77,13 +78,14 @@ func ConfigureLogging(config Config) error {
 	}
 
 	logrus.SetLevel(config.LogLevel)
+	logrus.SetReportCaller(config.LogCaller)
 
 	// XXX: while 0 is a valid fd (usually stdin), here we assume
 	// that we never deliberately set LogPipeFd to 0.
 	if config.LogPipeFd > 0 {
 		logrus.SetOutput(os.NewFile(uintptr(config.LogPipeFd), "logpipe"))
 	} else if config.LogFilePath != "" {
-		f, err := os.OpenFile(config.LogFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0644)
+		f, err := os.OpenFile(config.LogFilePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND|os.O_SYNC, 0o644)
 		if err != nil {
 			return err
 		}

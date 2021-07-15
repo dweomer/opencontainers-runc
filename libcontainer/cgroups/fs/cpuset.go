@@ -3,70 +3,69 @@
 package fs
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
 	"github.com/opencontainers/runc/libcontainer/configs"
-	"github.com/pkg/errors"
-	"golang.org/x/sys/unix"
 )
 
-type CpusetGroup struct {
-}
+type CpusetGroup struct{}
 
 func (s *CpusetGroup) Name() string {
 	return "cpuset"
 }
 
 func (s *CpusetGroup) Apply(path string, d *cgroupData) error {
-	return s.ApplyDir(path, d.config, d.pid)
+	return s.ApplyDir(path, d.config.Resources, d.pid)
 }
 
-func (s *CpusetGroup) Set(path string, cgroup *configs.Cgroup) error {
-	if cgroup.Resources.CpusetCpus != "" {
-		if err := fscommon.WriteFile(path, "cpuset.cpus", cgroup.Resources.CpusetCpus); err != nil {
+func (s *CpusetGroup) Set(path string, r *configs.Resources) error {
+	if r.CpusetCpus != "" {
+		if err := cgroups.WriteFile(path, "cpuset.cpus", r.CpusetCpus); err != nil {
 			return err
 		}
 	}
-	if cgroup.Resources.CpusetMems != "" {
-		if err := fscommon.WriteFile(path, "cpuset.mems", cgroup.Resources.CpusetMems); err != nil {
+	if r.CpusetMems != "" {
+		if err := cgroups.WriteFile(path, "cpuset.mems", r.CpusetMems); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func getCpusetStat(path string, filename string) ([]uint16, error) {
+func getCpusetStat(path string, file string) ([]uint16, error) {
 	var extracted []uint16
-	fileContent, err := fscommon.GetCgroupParamString(path, filename)
+	fileContent, err := fscommon.GetCgroupParamString(path, file)
 	if err != nil {
 		return extracted, err
 	}
 	if len(fileContent) == 0 {
-		return extracted, fmt.Errorf("%s found to be empty", filepath.Join(path, filename))
+		return extracted, &parseError{Path: path, File: file, Err: errors.New("empty file")}
 	}
 
 	for _, s := range strings.Split(fileContent, ",") {
 		splitted := strings.SplitN(s, "-", 3)
 		switch len(splitted) {
 		case 3:
-			return extracted, fmt.Errorf("invalid values in %s", filepath.Join(path, filename))
+			return extracted, &parseError{Path: path, File: file, Err: errors.New("extra dash")}
 		case 2:
 			min, err := strconv.ParseUint(splitted[0], 10, 16)
 			if err != nil {
-				return extracted, err
+				return extracted, &parseError{Path: path, File: file, Err: err}
 			}
 			max, err := strconv.ParseUint(splitted[1], 10, 16)
 			if err != nil {
-				return extracted, err
+				return extracted, &parseError{Path: path, File: file, Err: err}
 			}
 			if min > max {
-				return extracted, fmt.Errorf("invalid values in %s", filepath.Join(path, filename))
+				return extracted, &parseError{Path: path, File: file, Err: errors.New("invalid values, min > max")}
 			}
 			for i := min; i <= max; i++ {
 				extracted = append(extracted, uint16(i))
@@ -74,7 +73,7 @@ func getCpusetStat(path string, filename string) ([]uint16, error) {
 		case 1:
 			value, err := strconv.ParseUint(s, 10, 16)
 			if err != nil {
-				return extracted, err
+				return extracted, &parseError{Path: path, File: file, Err: err}
 			}
 			extracted = append(extracted, uint16(value))
 		}
@@ -144,7 +143,7 @@ func (s *CpusetGroup) GetStats(path string, stats *cgroups.Stats) error {
 	return nil
 }
 
-func (s *CpusetGroup) ApplyDir(dir string, cgroup *configs.Cgroup, pid int) error {
+func (s *CpusetGroup) ApplyDir(dir string, r *configs.Resources, pid int) error {
 	// This might happen if we have no cpuset cgroup mounted.
 	// Just do nothing and don't fail.
 	if dir == "" {
@@ -156,7 +155,7 @@ func (s *CpusetGroup) ApplyDir(dir string, cgroup *configs.Cgroup, pid int) erro
 	if err := cpusetEnsureParent(filepath.Dir(dir)); err != nil {
 		return err
 	}
-	if err := os.Mkdir(dir, 0755); err != nil && !os.IsExist(err) {
+	if err := os.Mkdir(dir, 0o755); err != nil && !os.IsExist(err) {
 		return err
 	}
 	// We didn't inherit cpuset configs from parent, but we have
@@ -166,7 +165,7 @@ func (s *CpusetGroup) ApplyDir(dir string, cgroup *configs.Cgroup, pid int) erro
 	// specified configs, otherwise, inherit from parent. This makes
 	// cpuset configs work correctly with 'cpuset.cpu_exclusive', and
 	// keep backward compatibility.
-	if err := s.ensureCpusAndMems(dir, cgroup); err != nil {
+	if err := s.ensureCpusAndMems(dir, r); err != nil {
 		return err
 	}
 
@@ -176,10 +175,10 @@ func (s *CpusetGroup) ApplyDir(dir string, cgroup *configs.Cgroup, pid int) erro
 }
 
 func getCpusetSubsystemSettings(parent string) (cpus, mems string, err error) {
-	if cpus, err = fscommon.ReadFile(parent, "cpuset.cpus"); err != nil {
+	if cpus, err = cgroups.ReadFile(parent, "cpuset.cpus"); err != nil {
 		return
 	}
-	if mems, err = fscommon.ReadFile(parent, "cpuset.mems"); err != nil {
+	if mems, err = cgroups.ReadFile(parent, "cpuset.mems"); err != nil {
 		return
 	}
 	return cpus, mems, nil
@@ -199,14 +198,14 @@ func cpusetEnsureParent(current string) error {
 	}
 	// Treat non-existing directory as cgroupfs as it will be created,
 	// and the root cpuset directory obviously exists.
-	if err != nil && err != unix.ENOENT {
+	if err != nil && err != unix.ENOENT { //nolint:errorlint // unix errors are bare
 		return &os.PathError{Op: "statfs", Path: parent, Err: err}
 	}
 
 	if err := cpusetEnsureParent(parent); err != nil {
 		return err
 	}
-	if err := os.Mkdir(current, 0755); err != nil && !os.IsExist(err) {
+	if err := os.Mkdir(current, 0o755); err != nil && !os.IsExist(err) {
 		return err
 	}
 	return cpusetCopyIfNeeded(current, parent)
@@ -225,12 +224,12 @@ func cpusetCopyIfNeeded(current, parent string) error {
 	}
 
 	if isEmptyCpuset(currentCpus) {
-		if err := fscommon.WriteFile(current, "cpuset.cpus", string(parentCpus)); err != nil {
+		if err := cgroups.WriteFile(current, "cpuset.cpus", parentCpus); err != nil {
 			return err
 		}
 	}
 	if isEmptyCpuset(currentMems) {
-		if err := fscommon.WriteFile(current, "cpuset.mems", string(parentMems)); err != nil {
+		if err := cgroups.WriteFile(current, "cpuset.mems", parentMems); err != nil {
 			return err
 		}
 	}
@@ -241,8 +240,8 @@ func isEmptyCpuset(str string) bool {
 	return str == "" || str == "\n"
 }
 
-func (s *CpusetGroup) ensureCpusAndMems(path string, cgroup *configs.Cgroup) error {
-	if err := s.Set(path, cgroup); err != nil {
+func (s *CpusetGroup) ensureCpusAndMems(path string, r *configs.Resources) error {
+	if err := s.Set(path, r); err != nil {
 		return err
 	}
 	return cpusetCopyIfNeeded(path, filepath.Dir(path))

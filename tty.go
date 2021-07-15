@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"github.com/containerd/console"
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/utils"
-	"github.com/pkg/errors"
 )
 
 type tty struct {
@@ -27,8 +27,8 @@ type tty struct {
 
 func (t *tty) copyIO(w io.Writer, r io.ReadCloser) {
 	defer t.wg.Done()
-	io.Copy(w, r)
-	r.Close()
+	_, _ = io.Copy(w, r)
+	_ = r.Close()
 }
 
 // setup pipes for the process so that advanced features like c/r are able to easily checkpoint
@@ -56,8 +56,8 @@ func setupProcessPipes(p *libcontainer.Process, rootuid, rootgid int) (*tty, err
 		}
 	}
 	go func() {
-		io.Copy(i.Stdin, os.Stdin)
-		i.Stdin.Close()
+		_, _ = io.Copy(i.Stdin, os.Stdin)
+		_ = i.Stdin.Close()
 	}()
 	t.wg.Add(2)
 	go t.copyIO(os.Stdout, i.Stdout)
@@ -77,16 +77,15 @@ func (t *tty) initHostConsole() error {
 	// the terminal, but they might be redirected, so try them all.
 	for _, s := range []*os.File{os.Stderr, os.Stdout, os.Stdin} {
 		c, err := console.ConsoleFromFile(s)
-		switch err {
-		case nil:
+		if err == nil {
 			t.hostConsole = c
 			return nil
-		case console.ErrNotAConsole:
-			continue
-		default:
-			// should not happen
-			return errors.Wrap(err, "unable to get console")
 		}
+		if errors.Is(err, console.ErrNotAConsole) {
+			continue
+		}
+		// should not happen
+		return fmt.Errorf("unable to get console: %w", err)
 	}
 	// If all streams are redirected, but we still have a controlling
 	// terminal, it can be obtained by opening /dev/tty.
@@ -96,7 +95,7 @@ func (t *tty) initHostConsole() error {
 	}
 	c, err := console.ConsoleFromFile(tty)
 	if err != nil {
-		return errors.Wrap(err, "unable to get console")
+		return fmt.Errorf("unable to get console: %w", err)
 	}
 
 	t.hostConsole = c
@@ -126,17 +125,17 @@ func (t *tty) recvtty(process *libcontainer.Process, socket *os.File) (Err error
 	}
 	defer func() {
 		if Err != nil {
-			epollConsole.Close()
+			_ = epollConsole.Close()
 		}
 	}()
-	go epoller.Wait()
-	go io.Copy(epollConsole, os.Stdin)
+	go func() { _ = epoller.Wait() }()
+	go func() { _, _ = io.Copy(epollConsole, os.Stdin) }()
 	t.wg.Add(1)
 	go t.copyIO(os.Stdout, epollConsole)
 
 	// Set raw mode for the controlling terminal.
 	if err := t.hostConsole.SetRaw(); err != nil {
-		return fmt.Errorf("failed to set the terminal from the stdin: %v", err)
+		return fmt.Errorf("failed to set the terminal from the stdin: %w", err)
 	}
 	go handleInterrupt(t.hostConsole)
 
@@ -150,7 +149,7 @@ func handleInterrupt(c console.Console) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, os.Interrupt)
 	<-sigchan
-	c.Reset()
+	_ = c.Reset()
 	os.Exit(0)
 }
 
@@ -165,7 +164,7 @@ func (t *tty) waitConsole() error {
 // so that we no longer have copy in our process.
 func (t *tty) ClosePostStart() error {
 	for _, c := range t.postStart {
-		c.Close()
+		_ = c.Close()
 	}
 	return nil
 }
@@ -175,19 +174,19 @@ func (t *tty) ClosePostStart() error {
 func (t *tty) Close() error {
 	// ensure that our side of the fds are always closed
 	for _, c := range t.postStart {
-		c.Close()
+		_ = c.Close()
 	}
 	// the process is gone at this point, shutting down the console if we have
 	// one and wait for all IO to be finished
 	if t.console != nil && t.epoller != nil {
-		t.console.Shutdown(t.epoller.CloseConsole)
+		_ = t.console.Shutdown(t.epoller.CloseConsole)
 	}
 	t.wg.Wait()
 	for _, c := range t.closers {
-		c.Close()
+		_ = c.Close()
 	}
 	if t.hostConsole != nil {
-		t.hostConsole.Reset()
+		_ = t.hostConsole.Reset()
 	}
 	return nil
 }

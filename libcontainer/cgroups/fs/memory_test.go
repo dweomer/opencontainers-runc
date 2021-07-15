@@ -58,13 +58,13 @@ func TestMemorySetMemory(t *testing.T) {
 	helper.CgroupData.config.Resources.Memory = memoryAfter
 	helper.CgroupData.config.Resources.MemoryReservation = reservationAfter
 	memory := &MemoryGroup{}
-	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, "memory.limit_in_bytes")
 	if err != nil {
-		t.Fatalf("Failed to parse memory.limit_in_bytes - %s", err)
+		t.Fatal(err)
 	}
 	if value != memoryAfter {
 		t.Fatal("Got the wrong value, set memory.limit_in_bytes failed.")
@@ -72,7 +72,7 @@ func TestMemorySetMemory(t *testing.T) {
 
 	value, err = fscommon.GetCgroupParamUint(helper.CgroupPath, "memory.soft_limit_in_bytes")
 	if err != nil {
-		t.Fatalf("Failed to parse memory.soft_limit_in_bytes - %s", err)
+		t.Fatal(err)
 	}
 	if value != reservationAfter {
 		t.Fatal("Got the wrong value, set memory.soft_limit_in_bytes failed.")
@@ -94,13 +94,13 @@ func TestMemorySetMemoryswap(t *testing.T) {
 
 	helper.CgroupData.config.Resources.MemorySwap = memoryswapAfter
 	memory := &MemoryGroup{}
-	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, "memory.memsw.limit_in_bytes")
 	if err != nil {
-		t.Fatalf("Failed to parse memory.memsw.limit_in_bytes - %s", err)
+		t.Fatal(err)
 	}
 	if value != memoryswapAfter {
 		t.Fatal("Got the wrong value, set memory.memsw.limit_in_bytes failed.")
@@ -131,20 +131,21 @@ func TestMemorySetMemoryLargerThanSwap(t *testing.T) {
 	helper.CgroupData.config.Resources.Memory = memoryAfter
 	helper.CgroupData.config.Resources.MemorySwap = memoryswapAfter
 	memory := &MemoryGroup{}
-	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, "memory.limit_in_bytes")
 	if err != nil {
-		t.Fatalf("Failed to parse memory.limit_in_bytes - %s", err)
+		t.Fatal(err)
 	}
 	if value != memoryAfter {
 		t.Fatal("Got the wrong value, set memory.limit_in_bytes failed.")
 	}
+
 	value, err = fscommon.GetCgroupParamUint(helper.CgroupPath, "memory.memsw.limit_in_bytes")
 	if err != nil {
-		t.Fatalf("Failed to parse memory.memsw.limit_in_bytes - %s", err)
+		t.Fatal(err)
 	}
 	if value != memoryswapAfter {
 		t.Fatal("Got the wrong value, set memory.memsw.limit_in_bytes failed.")
@@ -170,20 +171,21 @@ func TestMemorySetSwapSmallerThanMemory(t *testing.T) {
 	helper.CgroupData.config.Resources.Memory = memoryAfter
 	helper.CgroupData.config.Resources.MemorySwap = memoryswapAfter
 	memory := &MemoryGroup{}
-	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, "memory.limit_in_bytes")
 	if err != nil {
-		t.Fatalf("Failed to parse memory.limit_in_bytes - %s", err)
+		t.Fatal(err)
 	}
 	if value != memoryAfter {
 		t.Fatalf("Got the wrong value (%d != %d), set memory.limit_in_bytes failed", value, memoryAfter)
 	}
+
 	value, err = fscommon.GetCgroupParamUint(helper.CgroupPath, "memory.memsw.limit_in_bytes")
 	if err != nil {
-		t.Fatalf("Failed to parse memory.memsw.limit_in_bytes - %s", err)
+		t.Fatal(err)
 	}
 	if value != memoryswapAfter {
 		t.Fatalf("Got the wrong value (%d != %d), set memory.memsw.limit_in_bytes failed", value, memoryswapAfter)
@@ -194,7 +196,7 @@ func TestMemorySetMemorySwappinessDefault(t *testing.T) {
 	helper := NewCgroupTestUtil("memory", t)
 	defer helper.cleanup()
 
-	swappinessBefore := 60 //default is 60
+	swappinessBefore := 60 // default is 60
 	swappinessAfter := uint64(0)
 
 	helper.writeFileContents(map[string]string{
@@ -203,13 +205,13 @@ func TestMemorySetMemorySwappinessDefault(t *testing.T) {
 
 	helper.CgroupData.config.Resources.MemorySwappiness = &swappinessAfter
 	memory := &MemoryGroup{}
-	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, "memory.swappiness")
 	if err != nil {
-		t.Fatalf("Failed to parse memory.swappiness - %s", err)
+		t.Fatal(err)
 	}
 	if value != swappinessAfter {
 		t.Fatalf("Got the wrong value (%d), set memory.swappiness = %d failed.", value, swappinessAfter)
@@ -243,7 +245,13 @@ func TestMemoryStats(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expectedStats := cgroups.MemoryStats{Cache: 512, Usage: cgroups.MemoryData{Usage: 2048, MaxUsage: 4096, Failcnt: 100, Limit: 8192}, SwapUsage: cgroups.MemoryData{Usage: 2048, MaxUsage: 4096, Failcnt: 100, Limit: 8192}, KernelUsage: cgroups.MemoryData{Usage: 2048, MaxUsage: 4096, Failcnt: 100, Limit: 8192}, Stats: map[string]uint64{"cache": 512, "rss": 1024}, UseHierarchy: true,
+	expectedStats := cgroups.MemoryStats{
+		Cache:        512,
+		Usage:        cgroups.MemoryData{Usage: 2048, MaxUsage: 4096, Failcnt: 100, Limit: 8192},
+		SwapUsage:    cgroups.MemoryData{Usage: 2048, MaxUsage: 4096, Failcnt: 100, Limit: 8192},
+		KernelUsage:  cgroups.MemoryData{Usage: 2048, MaxUsage: 4096, Failcnt: 100, Limit: 8192},
+		Stats:        map[string]uint64{"cache": 512, "rss": 1024},
+		UseHierarchy: true,
 		PageUsageByNUMA: cgroups.PageUsageByNUMA{
 			PageUsageByNUMAInner: cgroups.PageUsageByNUMAInner{
 				Total:       cgroups.PageStats{Total: 44611, Nodes: map[uint8]uint64{0: 32631, 1: 7501, 2: 1982, 3: 2497}},
@@ -257,7 +265,8 @@ func TestMemoryStats(t *testing.T) {
 				Anon:        cgroups.PageStats{Total: 46096, Nodes: map[uint8]uint64{0: 12597, 1: 18890, 2: 283, 3: 14326}},
 				Unevictable: cgroups.PageStats{Total: 20, Nodes: map[uint8]uint64{0: 0, 1: 0, 2: 0, 3: 20}},
 			},
-		}}
+		},
+	}
 	expectMemoryStatEquals(t, expectedStats, actualStats.MemoryStats)
 }
 
@@ -414,15 +423,14 @@ func TestMemorySetOomControl(t *testing.T) {
 	})
 
 	memory := &MemoryGroup{}
-	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := memory.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, "memory.oom_control")
 	if err != nil {
-		t.Fatalf("Failed to parse memory.oom_control - %s", err)
+		t.Fatal(err)
 	}
-
 	if value != oomKillDisable {
 		t.Fatalf("Got the wrong value, set memory.oom_control failed.")
 	}

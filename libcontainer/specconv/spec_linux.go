@@ -85,7 +85,7 @@ var AllowedDevices = []*devices.Device{
 	},
 	{
 		Path:     "/dev/null",
-		FileMode: 0666,
+		FileMode: 0o666,
 		Uid:      0,
 		Gid:      0,
 		Rule: devices.Rule{
@@ -98,7 +98,7 @@ var AllowedDevices = []*devices.Device{
 	},
 	{
 		Path:     "/dev/random",
-		FileMode: 0666,
+		FileMode: 0o666,
 		Uid:      0,
 		Gid:      0,
 		Rule: devices.Rule{
@@ -111,7 +111,7 @@ var AllowedDevices = []*devices.Device{
 	},
 	{
 		Path:     "/dev/full",
-		FileMode: 0666,
+		FileMode: 0o666,
 		Uid:      0,
 		Gid:      0,
 		Rule: devices.Rule{
@@ -124,7 +124,7 @@ var AllowedDevices = []*devices.Device{
 	},
 	{
 		Path:     "/dev/tty",
-		FileMode: 0666,
+		FileMode: 0o666,
 		Uid:      0,
 		Gid:      0,
 		Rule: devices.Rule{
@@ -137,7 +137,7 @@ var AllowedDevices = []*devices.Device{
 	},
 	{
 		Path:     "/dev/zero",
-		FileMode: 0666,
+		FileMode: 0o666,
 		Uid:      0,
 		Gid:      0,
 		Rule: devices.Rule{
@@ -150,7 +150,7 @@ var AllowedDevices = []*devices.Device{
 	},
 	{
 		Path:     "/dev/urandom",
-		FileMode: 0666,
+		FileMode: 0o666,
 		Uid:      0,
 		Gid:      0,
 		Rule: devices.Rule{
@@ -216,7 +216,7 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 	}
 	spec := opts.Spec
 	if spec.Root == nil {
-		return nil, fmt.Errorf("Root must be specified")
+		return nil, errors.New("Root must be specified")
 	}
 	rootfsPath := spec.Root.Path
 	if !filepath.IsAbs(rootfsPath) {
@@ -263,7 +263,7 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 			return nil, fmt.Errorf("rootfsPropagation=%v is not supported", spec.Linux.RootfsPropagation)
 		}
 		if config.NoPivotRoot && (config.RootPropagation&unix.MS_PRIVATE != 0) {
-			return nil, fmt.Errorf("rootfsPropagation of [r]private is not safe without pivot_root")
+			return nil, errors.New("rootfsPropagation of [r]private is not safe without pivot_root")
 		}
 
 		for _, ns := range spec.Linux.Namespaces {
@@ -300,12 +300,9 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 			config.Seccomp = seccomp
 		}
 		if spec.Linux.IntelRdt != nil {
-			config.IntelRdt = &configs.IntelRdt{}
-			if spec.Linux.IntelRdt.L3CacheSchema != "" {
-				config.IntelRdt.L3CacheSchema = spec.Linux.IntelRdt.L3CacheSchema
-			}
-			if spec.Linux.IntelRdt.MemBwSchema != "" {
-				config.IntelRdt.MemBwSchema = spec.Linux.IntelRdt.MemBwSchema
+			config.IntelRdt = &configs.IntelRdt{
+				L3CacheSchema: spec.Linux.IntelRdt.L3CacheSchema,
+				MemBwSchema:   spec.Linux.IntelRdt.MemBwSchema,
 			}
 		}
 	}
@@ -313,9 +310,7 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 		config.OomScoreAdj = spec.Process.OOMScoreAdj
 		config.NoNewPrivileges = spec.Process.NoNewPrivileges
 		config.Umask = spec.Process.User.Umask
-		if spec.Process.SelinuxLabel != "" {
-			config.ProcessLabel = spec.Process.SelinuxLabel
-		}
+		config.ProcessLabel = spec.Process.SelinuxLabel
 		if spec.Process.Capabilities != nil {
 			config.Capabilities = &configs.Capabilities{
 				Bounding:    spec.Process.Capabilities.Bounding,
@@ -333,7 +328,10 @@ func CreateLibcontainerConfig(opts *CreateOpts) (*configs.Config, error) {
 
 func createLibcontainerMount(cwd string, m specs.Mount) (*configs.Mount, error) {
 	if !filepath.IsAbs(m.Destination) {
-		return nil, fmt.Errorf("mount destination %s not absolute", m.Destination)
+		// Relax validation for backward compatibility
+		// TODO (runc v1.x.x): change warning to an error
+		// return nil, fmt.Errorf("mount destination %s is not absolute", m.Destination)
+		logrus.Warnf("mount destination %s is not absolute. Support for non-absolute mount destinations will be removed in a future release.", m.Destination)
 	}
 	flags, pgflags, data, ext := parseMountOptions(m.Options)
 	source := m.Source
@@ -407,13 +405,13 @@ func initSystemdProps(spec *specs.Spec) ([]systemdDbus.Property, error) {
 		}
 		value, err := dbus.ParseVariant(v, dbus.Signature{})
 		if err != nil {
-			return nil, fmt.Errorf("Annotation %s=%s value parse error: %v", k, v, err)
+			return nil, fmt.Errorf("Annotation %s=%s value parse error: %w", k, v, err)
 		}
 		if isSecSuffix(name) {
 			name = strings.TrimSuffix(name, "Sec") + "USec"
 			value, err = convertSecToUSec(value)
 			if err != nil {
-				return nil, fmt.Errorf("Annotation %s=%s value parse error: %v", k, v, err)
+				return nil, fmt.Errorf("Annotation %s=%s value parse error: %w", k, v, err)
 			}
 		}
 		sp = append(sp, systemdDbus.Property{Name: name, Value: value})
@@ -533,7 +531,7 @@ func CreateCgroupConfig(opts *CreateOpts, defaultDevs []*devices.Device) (*confi
 				if r.CPU.Shares != nil {
 					c.Resources.CpuShares = *r.CPU.Shares
 
-					//CpuWeight is used for cgroupv2 and should be converted
+					// CpuWeight is used for cgroupv2 and should be converted
 					c.Resources.CpuWeight = cgroups.ConvertCPUSharesToCgroupV2Value(c.Resources.CpuShares)
 				}
 				if r.CPU.Quota != nil {
@@ -548,12 +546,8 @@ func CreateCgroupConfig(opts *CreateOpts, defaultDevs []*devices.Device) (*confi
 				if r.CPU.RealtimePeriod != nil {
 					c.Resources.CpuRtPeriod = *r.CPU.RealtimePeriod
 				}
-				if r.CPU.Cpus != "" {
-					c.Resources.CpusetCpus = r.CPU.Cpus
-				}
-				if r.CPU.Mems != "" {
-					c.Resources.CpusetMems = r.CPU.Mems
-				}
+				c.Resources.CpusetCpus = r.CPU.Cpus
+				c.Resources.CpusetMems = r.CPU.Mems
 			}
 			if r.Pids != nil {
 				c.Resources.PidsLimit = r.Pids.Limit
@@ -691,7 +685,7 @@ next:
 	if spec.Linux != nil {
 		for _, d := range spec.Linux.Devices {
 			var uid, gid uint32
-			var filemode os.FileMode = 0666
+			var filemode os.FileMode = 0o666
 
 			if d.UID != nil {
 				uid = *d.UID
@@ -855,7 +849,7 @@ func SetupSeccomp(config *specs.LinuxSeccomp) (*configs.Seccomp, error) {
 
 	// We don't currently support seccomp flags.
 	if len(config.Flags) != 0 {
-		return nil, fmt.Errorf("seccomp flags are not yet supported by runc")
+		return nil, errors.New("seccomp flags are not yet supported by runc")
 	}
 
 	newConfig := new(configs.Seccomp)
@@ -878,6 +872,7 @@ func SetupSeccomp(config *specs.LinuxSeccomp) (*configs.Seccomp, error) {
 		return nil, err
 	}
 	newConfig.DefaultAction = newDefaultAction
+	newConfig.DefaultErrnoRet = config.DefaultErrnoRet
 
 	// Loop through all syscall blocks and convert them to libcontainer format
 	for _, call := range config.Syscalls {

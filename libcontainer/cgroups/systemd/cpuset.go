@@ -2,18 +2,18 @@ package systemd
 
 import (
 	"encoding/binary"
+	"errors"
 	"strconv"
 	"strings"
 
-	"github.com/pkg/errors"
-	"github.com/willf/bitset"
+	"github.com/bits-and-blooms/bitset"
 )
 
-// rangeToBits converts a text representation of a CPU mask (as written to
+// RangeToBits converts a text representation of a CPU mask (as written to
 // or read from cgroups' cpuset.* files, e.g. "1,3-5") to a slice of bytes
 // with the corresponding bits set (as consumed by systemd over dbus as
 // AllowedCPUs/AllowedMemoryNodes unit property value).
-func rangeToBits(str string) ([]byte, error) {
+func RangeToBits(str string) ([]byte, error) {
 	bits := &bitset.BitSet{}
 
 	for _, r := range strings.Split(str, ",") {

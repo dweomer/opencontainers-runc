@@ -7,10 +7,10 @@ import (
 	"os/exec"
 	"time"
 
+	"github.com/sirupsen/logrus"
+
 	"github.com/opencontainers/runc/libcontainer/devices"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/pkg/errors"
-	"github.com/sirupsen/logrus"
 )
 
 type Rlimit struct {
@@ -31,9 +31,10 @@ type IDMap struct {
 // for syscalls. Additional architectures can be added by specifying them in
 // Architectures.
 type Seccomp struct {
-	DefaultAction Action     `json:"default_action"`
-	Architectures []string   `json:"architectures"`
-	Syscalls      []*Syscall `json:"syscalls"`
+	DefaultAction   Action     `json:"default_action"`
+	Architectures   []string   `json:"architectures"`
+	Syscalls        []*Syscall `json:"syscalls"`
+	DefaultErrnoRet *uint      `json:"default_errno_ret"`
 }
 
 // Action is taken upon rule match in Seccomp
@@ -207,9 +208,11 @@ type Config struct {
 	RootlessCgroups bool `json:"rootless_cgroups,omitempty"`
 }
 
-type HookName string
-type HookList []Hook
-type Hooks map[HookName]HookList
+type (
+	HookName string
+	HookList []Hook
+	Hooks    map[HookName]HookList
+)
 
 const (
 	// Prestart commands are executed after the container namespaces are created,
@@ -259,7 +262,7 @@ type Capabilities struct {
 func (hooks HookList) RunHooks(state *specs.State) error {
 	for i, h := range hooks {
 		if err := h.Run(state); err != nil {
-			return errors.Wrapf(err, "Running hook #%d:", i)
+			return fmt.Errorf("error running hook #%d: %w", i, err)
 		}
 	}
 
@@ -372,7 +375,7 @@ func (c Command) Run(s *specs.State) error {
 	go func() {
 		err := cmd.Wait()
 		if err != nil {
-			err = fmt.Errorf("error running hook: %v, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
+			err = fmt.Errorf("error running hook: %w, stdout: %s, stderr: %s", err, stdout.String(), stderr.String())
 		}
 		errC <- err
 	}()
@@ -386,7 +389,7 @@ func (c Command) Run(s *specs.State) error {
 	case err := <-errC:
 		return err
 	case <-timerCh:
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 		<-errC
 		return fmt.Errorf("hook ran past specified timeout of %.1fs", c.Timeout.Seconds())
 	}

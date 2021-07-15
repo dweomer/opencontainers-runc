@@ -53,15 +53,14 @@ func TestCPUSetSetCpus(t *testing.T) {
 
 	helper.CgroupData.config.Resources.CpusetCpus = cpusAfter
 	cpuset := &CpusetGroup{}
-	if err := cpuset.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := cpuset.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "cpuset.cpus")
 	if err != nil {
-		t.Fatalf("Failed to parse cpuset.cpus - %s", err)
+		t.Fatal(err)
 	}
-
 	if value != cpusAfter {
 		t.Fatal("Got the wrong value, set cpuset.cpus failed.")
 	}
@@ -82,15 +81,14 @@ func TestCPUSetSetMems(t *testing.T) {
 
 	helper.CgroupData.config.Resources.CpusetMems = memsAfter
 	cpuset := &CpusetGroup{}
-	if err := cpuset.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := cpuset.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
 	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "cpuset.mems")
 	if err != nil {
-		t.Fatalf("Failed to parse cpuset.mems - %s", err)
+		t.Fatal(err)
 	}
-
 	if value != memsAfter {
 		t.Fatal("Got the wrong value, set cpuset.mems failed.")
 	}
@@ -118,12 +116,12 @@ func TestCPUSetStatsCorrect(t *testing.T) {
 		MemorySpreadSlab:      1,
 		MemoryPressure:        34377,
 		SchedLoadBalance:      1,
-		SchedRelaxDomainLevel: -1}
+		SchedRelaxDomainLevel: -1,
+	}
 	if !reflect.DeepEqual(expectedStats, actualStats.CPUSetStats) {
 		t.Fatalf("Expected Cpuset stats usage %#v but found %#v",
 			expectedStats, actualStats.CPUSetStats)
 	}
-
 }
 
 func TestCPUSetStatsMissingFiles(t *testing.T) {
@@ -226,7 +224,6 @@ func TestCPUSetStatsMissingFiles(t *testing.T) {
 				cpuset := &CpusetGroup{}
 				actualStats := *cgroups.NewStats()
 				err := cpuset.GetStats(helper.CgroupPath, &actualStats)
-
 				if err != nil {
 					t.Errorf("failed unexpectedly: %q", err)
 				}

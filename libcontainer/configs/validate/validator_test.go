@@ -154,7 +154,7 @@ func TestValidateSecurityWithoutNEWNS(t *testing.T) {
 
 func TestValidateUsernamespace(t *testing.T) {
 	if _, err := os.Stat("/proc/self/ns/user"); os.IsNotExist(err) {
-		t.Skip("userns is unsupported")
+		t.Skip("Test requires userns.")
 	}
 	config := &configs.Config{
 		Rootfs: "/var",
@@ -323,10 +323,12 @@ func TestValidateMounts(t *testing.T) {
 		isErr bool
 		dest  string
 	}{
-		{isErr: true, dest: "not/an/abs/path"},
-		{isErr: true, dest: "./rel/path"},
-		{isErr: true, dest: "./rel/path"},
-		{isErr: true, dest: "../../path"},
+		// TODO (runc v1.x.x): make these relative paths an error. See https://github.com/opencontainers/runc/pull/3004
+		{isErr: false, dest: "not/an/abs/path"},
+		{isErr: false, dest: "./rel/path"},
+		{isErr: false, dest: "./rel/path"},
+		{isErr: false, dest: "../../path"},
+
 		{isErr: false, dest: "/abs/path"},
 		{isErr: false, dest: "/abs/but/../unclean"},
 	}

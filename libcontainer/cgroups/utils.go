@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
 	"github.com/opencontainers/runc/libcontainer/userns"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/sys/unix"
@@ -88,7 +87,7 @@ func GetAllSubsystems() ([]string, error) {
 		// - freezer: implemented in kernel 5.2
 		// We assume these are always available, as it is hard to detect availability.
 		pseudo := []string{"devices", "freezer"}
-		data, err := fscommon.ReadFile("/sys/fs/cgroup", "cgroup.controllers")
+		data, err := ReadFile("/sys/fs/cgroup", "cgroup.controllers")
 		if err != nil {
 			return nil, err
 		}
@@ -211,7 +210,7 @@ func EnterPid(cgroupPaths map[string]string, pid int) error {
 
 func rmdir(path string) error {
 	err := unix.Rmdir(path)
-	if err == nil || err == unix.ENOENT {
+	if err == nil || err == unix.ENOENT { //nolint:errorlint // unix errors are bare
 		return nil
 	}
 	return &os.PathError{Op: "rmdir", Path: path, Err: err}
@@ -267,7 +266,6 @@ func RemovePaths(paths map[string]string) (err error) {
 				case retries - 1:
 					logrus.WithError(err).Error("Failed to remove cgroup")
 				}
-
 			}
 			_, err := os.Stat(p)
 			// We need this strange way of checking cgroups existence because
@@ -376,9 +374,9 @@ func WriteCgroupProc(dir string, pid int) error {
 		return nil
 	}
 
-	file, err := fscommon.OpenFile(dir, CgroupProcesses, os.O_WRONLY)
+	file, err := OpenFile(dir, CgroupProcesses, os.O_WRONLY)
 	if err != nil {
-		return fmt.Errorf("failed to write %v to %v: %v", pid, CgroupProcesses, err)
+		return fmt.Errorf("failed to write %v to %v: %w", pid, CgroupProcesses, err)
 	}
 	defer file.Close()
 
@@ -395,7 +393,7 @@ func WriteCgroupProc(dir string, pid int) error {
 			continue
 		}
 
-		return fmt.Errorf("failed to write %v to %v: %v", pid, CgroupProcesses, err)
+		return fmt.Errorf("failed to write %v to %v: %w", pid, CgroupProcesses, err)
 	}
 	return err
 }
@@ -448,5 +446,5 @@ func ConvertBlkIOToIOWeightValue(blkIoWeight uint16) uint64 {
 	if blkIoWeight == 0 {
 		return 0
 	}
-	return uint64(1 + (uint64(blkIoWeight)-10)*9999/990)
+	return 1 + (uint64(blkIoWeight)-10)*9999/990
 }

@@ -3,6 +3,7 @@
 package fs2
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -10,8 +11,9 @@ import (
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
 	"github.com/opencontainers/runc/libcontainer/configs"
-	"github.com/pkg/errors"
 )
+
+type parseError = fscommon.ParseError
 
 type manager struct {
 	config *configs.Cgroup
@@ -51,7 +53,7 @@ func (m *manager) getControllers() error {
 		return nil
 	}
 
-	data, err := fscommon.ReadFile(m.dirPath, "cgroup.controllers")
+	data, err := cgroups.ReadFile(m.dirPath, "cgroup.controllers")
 	if err != nil {
 		if m.rootless && m.config.Path == "" {
 			return nil
@@ -75,10 +77,10 @@ func (m *manager) Apply(pid int) error {
 		// - "runc create (rootless + limits + no cgrouppath + no permission) fails with informative error"
 		if m.rootless {
 			if m.config.Path == "" {
-				if blNeed, nErr := needAnyControllers(m.config); nErr == nil && !blNeed {
+				if blNeed, nErr := needAnyControllers(m.config.Resources); nErr == nil && !blNeed {
 					return nil
 				}
-				return errors.Wrap(err, "rootless needs no limits + no cgrouppath when no permission is granted for cgroups")
+				return fmt.Errorf("rootless needs no limits + no cgrouppath when no permission is granted for cgroups: %w", err)
 			}
 		}
 		return err
@@ -98,9 +100,7 @@ func (m *manager) GetAllPids() ([]int, error) {
 }
 
 func (m *manager) GetStats() (*cgroups.Stats, error) {
-	var (
-		errs []error
-	)
+	var errs []error
 
 	st := cgroups.NewStats()
 
@@ -126,7 +126,7 @@ func (m *manager) GetStats() (*cgroups.Stats, error) {
 		errs = append(errs, err)
 	}
 	if len(errs) > 0 && !m.rootless {
-		return st, errors.Errorf("error while statting cgroup v2: %+v", errs)
+		return st, fmt.Errorf("error while statting cgroup v2: %+v", errs)
 	}
 	return st, nil
 }
@@ -147,27 +147,24 @@ func (m *manager) Path(_ string) string {
 	return m.dirPath
 }
 
-func (m *manager) Set(container *configs.Config) error {
-	if container == nil || container.Cgroups == nil {
-		return nil
-	}
+func (m *manager) Set(r *configs.Resources) error {
 	if err := m.getControllers(); err != nil {
 		return err
 	}
 	// pids (since kernel 4.5)
-	if err := setPids(m.dirPath, container.Cgroups); err != nil {
+	if err := setPids(m.dirPath, r); err != nil {
 		return err
 	}
 	// memory (since kernel 4.5)
-	if err := setMemory(m.dirPath, container.Cgroups); err != nil {
+	if err := setMemory(m.dirPath, r); err != nil {
 		return err
 	}
 	// io (since kernel 4.5)
-	if err := setIo(m.dirPath, container.Cgroups); err != nil {
+	if err := setIo(m.dirPath, r); err != nil {
 		return err
 	}
 	// cpu (since kernel 4.15)
-	if err := setCpu(m.dirPath, container.Cgroups); err != nil {
+	if err := setCpu(m.dirPath, r); err != nil {
 		return err
 	}
 	// devices (since kernel 4.15, pseudo-controller)
@@ -175,25 +172,25 @@ func (m *manager) Set(container *configs.Config) error {
 	// When m.rootless is true, errors from the device subsystem are ignored because it is really not expected to work.
 	// However, errors from other subsystems are not ignored.
 	// see @test "runc create (rootless + limits + no cgrouppath + no permission) fails with informative error"
-	if err := setDevices(m.dirPath, container.Cgroups); err != nil && !m.rootless {
+	if err := setDevices(m.dirPath, r); err != nil && !m.rootless {
 		return err
 	}
 	// cpuset (since kernel 5.0)
-	if err := setCpuset(m.dirPath, container.Cgroups); err != nil {
+	if err := setCpuset(m.dirPath, r); err != nil {
 		return err
 	}
 	// hugetlb (since kernel 5.6)
-	if err := setHugeTlb(m.dirPath, container.Cgroups); err != nil {
+	if err := setHugeTlb(m.dirPath, r); err != nil {
 		return err
 	}
 	// freezer (since kernel 5.2, pseudo-controller)
-	if err := setFreezer(m.dirPath, container.Cgroups.Freezer); err != nil {
+	if err := setFreezer(m.dirPath, r.Freezer); err != nil {
 		return err
 	}
-	if err := m.setUnified(container.Cgroups.Unified); err != nil {
+	if err := m.setUnified(r.Unified); err != nil {
 		return err
 	}
-	m.config = container.Cgroups
+	m.config.Resources = r
 	return nil
 }
 
@@ -202,10 +199,9 @@ func (m *manager) setUnified(res map[string]string) error {
 		if strings.Contains(k, "/") {
 			return fmt.Errorf("unified resource %q must be a file name (no slashes)", k)
 		}
-		if err := fscommon.WriteFile(m.dirPath, k, v); err != nil {
-			errC := errors.Cause(err)
+		if err := cgroups.WriteFile(m.dirPath, k, v); err != nil {
 			// Check for both EPERM and ENOENT since O_CREAT is used by WriteFile.
-			if errors.Is(errC, os.ErrPermission) || errors.Is(errC, os.ErrNotExist) {
+			if errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist) {
 				// Check if a controller is available,
 				// to give more specific error if not.
 				sk := strings.SplitN(k, ".", 2)
@@ -217,7 +213,7 @@ func (m *manager) setUnified(res map[string]string) error {
 					return fmt.Errorf("unified resource %q can't be set: controller %q not available", k, c)
 				}
 			}
-			return errors.Wrapf(err, "can't set unified resource %q", k)
+			return fmt.Errorf("unable to set unified resource %q: %w", k, err)
 		}
 	}
 

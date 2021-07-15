@@ -4,7 +4,7 @@ package cgroups
 
 import (
 	"bytes"
-	"fmt"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -372,7 +372,7 @@ func TestParseCgroupString(t *testing.T) {
 		},
 		{
 			input:         `malformed input`,
-			expectedError: fmt.Errorf(`invalid cgroup entry: must contain at least two colons: malformed input`),
+			expectedError: errors.New(`invalid cgroup entry: must contain at least two colons: malformed input`),
 		},
 	}
 
@@ -388,7 +388,6 @@ func TestParseCgroupString(t *testing.T) {
 			}
 		}
 	}
-
 }
 
 func TestIgnoreCgroup2Mount(t *testing.T) {

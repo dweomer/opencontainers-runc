@@ -16,23 +16,17 @@ function setup() {
 }
 
 @test "runc create (rootless + no limits + cgrouppath + no permission) fails with permission error" {
-	requires rootless
-	requires rootless_no_cgroup
-	# systemd controls the permission, so error does not happen
-	requires no_systemd
+	requires rootless rootless_no_cgroup
 
 	set_cgroups_path
 
 	runc run -d --console-socket "$CONSOLE_SOCKET" test_cgroups_permissions
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"applying cgroup configuration"*"permission denied"* ]]
+	[[ "$output" == *"unable to apply cgroup configuration"*"permission denied"* ]]
 }
 
 @test "runc create (rootless + limits + no cgrouppath + no permission) fails with informative error" {
-	requires rootless
-	requires rootless_no_cgroup
-	# systemd controls the permission, so error does not happen
-	requires no_systemd
+	requires rootless rootless_no_cgroup
 
 	set_resources_limit
 
@@ -55,8 +49,8 @@ function setup() {
 			if [ "$(id -u)" = "0" ]; then
 				check_cgroup_value "cgroup.controllers" "$(cat /sys/fs/cgroup/machine.slice/cgroup.controllers)"
 			else
-				# shellcheck disable=SC2046
-				check_cgroup_value "cgroup.controllers" "$(cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/cgroup.controllers)"
+				# Filter out hugetlb as systemd is unable to delegate it.
+				check_cgroup_value "cgroup.controllers" "$(sed 's/ hugetlb//' </sys/fs/cgroup/user.slice/user-"$(id -u)".slice/cgroup.controllers)"
 			fi
 		else
 			check_cgroup_value "cgroup.controllers" "$(cat /sys/fs/cgroup/cgroup.controllers)"
@@ -154,6 +148,43 @@ function setup() {
 		runc exec test_cgroups_unified sh -c 'cat /sys/fs/cgroup/io.weight'
 		[ "$output" = 'default 7475' ]
 	fi
+}
+
+@test "runc run (per-device io weight for bfq)" {
+	requires root # to create a loop device
+
+	dd if=/dev/zero of=backing.img bs=4096 count=1
+	dev=$(losetup --find --show backing.img) || skip "unable to create a loop device"
+
+	# See if BFQ scheduler is available.
+	if ! { grep -qw bfq "/sys/block/${dev#/dev/}/queue/scheduler" &&
+		echo bfq >"/sys/block/${dev#/dev/}/queue/scheduler"; }; then
+		losetup -d "$dev"
+		skip "BFQ scheduler not available"
+	fi
+
+	set_cgroups_path
+
+	IFS=$' \t:' read -r major minor <<<"$(lsblk -nd -o MAJ:MIN "$dev")"
+	update_config '	  .linux.devices += [{path: "'"$dev"'", type: "b", major: '"$major"', minor: '"$minor"'}]
+			| .linux.resources.blockIO.weight |= 333
+			| .linux.resources.blockIO.weightDevice |= [
+				{ major: '"$major"', minor: '"$minor"', weight: 444 }
+			]'
+	runc run -d --console-socket "$CONSOLE_SOCKET" test_dev_weight
+	[ "$status" -eq 0 ]
+
+	# The loop device itself is no longer needed.
+	losetup -d "$dev"
+
+	if [ "$CGROUP_UNIFIED" = "yes" ]; then
+		file="io.bfq.weight"
+	else
+		file="blkio.bfq.weight_device"
+	fi
+	weights=$(get_cgroup_value $file)
+	[[ "$weights" == *"default 333"* ]]
+	[[ "$weights" == *"$major:$minor 444"* ]]
 }
 
 @test "runc run (cgroup v2 resources.unified only)" {

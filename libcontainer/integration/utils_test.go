@@ -2,8 +2,6 @@ package integration
 
 import (
 	"bytes"
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -11,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -36,7 +35,7 @@ func init() {
 	// Call it to make sure images are downloaded, and to get the paths.
 	out, err := exec.Command(getImages).CombinedOutput()
 	if err != nil {
-		panic(fmt.Errorf("getImages error %s (output: %s)", err, out))
+		panic(fmt.Errorf("getImages error %w (output: %s)", err, out))
 	}
 	// Extract the value of BUSYBOX_IMAGE.
 	found := regexp.MustCompile(`(?m)^BUSYBOX_IMAGE=(.*)$`).FindSubmatchIndex(out)
@@ -81,22 +80,21 @@ func (b *stdBuffers) String() string {
 
 // ok fails the test if an err is not nil.
 func ok(t testing.TB, err error) {
+	t.Helper()
 	if err != nil {
-		_, file, line, _ := runtime.Caller(1)
-		t.Fatalf("%s:%d: unexpected error: %s\n\n", filepath.Base(file), line, err.Error())
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func waitProcess(p *libcontainer.Process, t *testing.T) {
-	_, file, line, _ := runtime.Caller(1)
+	t.Helper()
 	status, err := p.Wait()
-
 	if err != nil {
-		t.Fatalf("%s:%d: unexpected error: %s\n\n", filepath.Base(file), line, err.Error())
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if !status.Success() {
-		t.Fatalf("%s:%d: unexpected status: %s\n\n", filepath.Base(file), line, status.String())
+		t.Fatalf("unexpected status: %v", status)
 	}
 }
 
@@ -105,7 +103,7 @@ func newTestRoot() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	testRoots = append(testRoots, dir)
@@ -117,7 +115,7 @@ func newTestBundle() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	return dir, nil
@@ -129,7 +127,7 @@ func newRootfs() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", err
 	}
 	if err := copyBusybox(dir); err != nil {
@@ -139,7 +137,7 @@ func newRootfs() (string, error) {
 }
 
 func remove(dir string) {
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 }
 
 // copyBusybox copies the rootfs for a busybox container created for the test image
@@ -147,18 +145,13 @@ func remove(dir string) {
 func copyBusybox(dest string) error {
 	out, err := exec.Command("sh", "-c", fmt.Sprintf("tar --exclude './dev/*' -C %q -xf %q", dest, busyboxTar)).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("untar error %q: %q", err, out)
+		return fmt.Errorf("untar error %w: %q", err, out)
 	}
 	return nil
 }
 
-func newContainer(config *configs.Config) (libcontainer.Container, error) {
-	h := md5.New()
-	h.Write([]byte(time.Now().String()))
-	return newContainerWithName(hex.EncodeToString(h.Sum(nil)), config)
-}
-
-func newContainerWithName(name string, config *configs.Config) (libcontainer.Container, error) {
+func newContainer(t *testing.T, config *configs.Config) (libcontainer.Container, error) {
+	name := strings.ReplaceAll(t.Name(), "/", "_") + strconv.FormatInt(-int64(time.Now().Nanosecond()), 35)
 	root, err := newTestRoot()
 	if err != nil {
 		return nil, err
@@ -181,12 +174,12 @@ func newContainerWithName(name string, config *configs.Config) (libcontainer.Con
 //
 // buffers are returned containing the STDOUT and STDERR output for the run
 // along with the exit code and any go error
-func runContainer(config *configs.Config, console string, args ...string) (buffers *stdBuffers, exitCode int, err error) {
-	container, err := newContainer(config)
+func runContainer(t *testing.T, config *configs.Config, console string, args ...string) (buffers *stdBuffers, exitCode int, err error) {
+	container, err := newContainer(t, config)
 	if err != nil {
 		return nil, -1, err
 	}
-	defer container.Destroy()
+	defer destroyContainer(container)
 	buffers = newStdBuffers()
 	process := &libcontainer.Process{
 		Cwd:    "/",
@@ -215,4 +208,8 @@ func runContainer(config *configs.Config, console string, args ...string) (buffe
 		return buffers, -1, err
 	}
 	return
+}
+
+func destroyContainer(container libcontainer.Container) {
+	_ = container.Destroy()
 }

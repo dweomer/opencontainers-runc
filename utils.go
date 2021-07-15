@@ -39,7 +39,7 @@ func checkArgs(context *cli.Context, expected, checkType int) error {
 
 	if err != nil {
 		fmt.Printf("Incorrect Usage.\n\n")
-		cli.ShowCommandHelp(context, cmdName)
+		_ = cli.ShowCommandHelp(context, cmdName)
 		return err
 	}
 	return nil
@@ -55,8 +55,6 @@ func logrusToStderr() bool {
 func fatal(err error) {
 	// make sure the error is written to the logger
 	logrus.Error(err)
-	// If debug is enabled and pkg/errors was used, show its stack trace.
-	logrus.Debugf("%+v", err)
 	if !logrusToStderr() {
 		fmt.Fprintln(os.Stderr, err)
 	}

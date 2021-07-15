@@ -11,6 +11,7 @@ on:
       - v*
     branches:
       - master
+      - release-*
   pull_request:
 
 jobs:
@@ -19,7 +20,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: [1.14.x, 1.15.x, 1.16.x]
+        # Docker/Moby still builds runc with Go 1.13, so we should still support Go 1.13.
+        go-version: [1.13.x, 1.15.x, 1.16.x]
         rootless: ["rootless", ""]
         race: ["-race", ""]
 
@@ -47,7 +49,7 @@ jobs:
     - name: install bats
       uses: mig4/setup-bats@v1
       with:
-        bats-version: 1.2.1
+        bats-version: 1.3.0
 
     - name: unit test
       if: matrix.rootless != 'rootless'
@@ -82,15 +84,15 @@ jobs:
     steps:
       - uses: actions/checkout@v2
 
-      - name: "Cache ~/.vagrant.d/boxes, using hash of Vagrantfile.fedora33"
+      - name: "Cache ~/.vagrant.d/boxes, using hash of Vagrantfile.fedora34"
         uses: actions/cache@v2
         with:
           path: ~/.vagrant.d/boxes
-          key: vagrant-${{ hashFiles('Vagrantfile.fedora33') }}
+          key: vagrant-${{ hashFiles('Vagrantfile.fedora34') }}
 
       - name: prepare vagrant
         run: |
-          ln -sf Vagrantfile.fedora33 Vagrantfile
+          ln -sf Vagrantfile.fedora34 Vagrantfile
           # Retry if it fails (download.fedoraproject.org returns 404 sometimes)
           vagrant up || vagrant up
           vagrant ssh-config >> ~/.ssh/config

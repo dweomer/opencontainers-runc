@@ -3,6 +3,7 @@
 package libcontainer
 
 import (
+	"errors"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -122,7 +123,10 @@ func TestFactoryNewTmpfs(t *testing.T) {
 	if m.Source != "tmpfs" {
 		t.Fatalf("Source of root: %s, expected %s", m.Source, "tmpfs")
 	}
-	unix.Unmount(root, unix.MNT_DETACH)
+	err = unix.Unmount(root, unix.MNT_DETACH)
+	if err != nil {
+		t.Error("failed to unmount root:", err)
+	}
 }
 
 func TestFactoryLoadNotExists(t *testing.T) {
@@ -130,7 +134,7 @@ func TestFactoryLoadNotExists(t *testing.T) {
 	if rerr != nil {
 		t.Fatal(rerr)
 	}
-	defer os.RemoveAll(root)
+	defer os.RemoveAll(root) //nolint: errcheck
 	factory, err := New(root, Cgroupfs)
 	if err != nil {
 		t.Fatal(err)
@@ -139,12 +143,8 @@ func TestFactoryLoadNotExists(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected nil error loading non-existing container")
 	}
-	lerr, ok := err.(Error)
-	if !ok {
-		t.Fatal("expected libcontainer error type")
-	}
-	if lerr.Code() != ContainerNotExists {
-		t.Fatalf("expected error code %s but received %s", ContainerNotExists, lerr.Code())
+	if !errors.Is(err, ErrNotExist) {
+		t.Fatalf("expected ErrNotExist, got %v", err)
 	}
 }
 
@@ -153,7 +153,7 @@ func TestFactoryLoadContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(root)
+	defer os.RemoveAll(root) //nolint: errcheck
 	// setup default container config and state for mocking
 	var (
 		id            = "1"
@@ -219,7 +219,7 @@ func marshal(path string, v interface{}) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer f.Close() //nolint: errcheck
 	return utils.WriteJSON(f, v)
 }
 

@@ -5,6 +5,7 @@ package intelrdt
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -15,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/moby/sys/mountinfo"
+	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
 	"github.com/opencontainers/runc/libcontainer/configs"
 )
 
@@ -181,7 +183,7 @@ func NewManager(config *configs.Config, id string, path string) Manager {
 }
 
 const (
-	IntelRdtTasks = "tasks"
+	intelRdtTasks = "tasks"
 )
 
 var (
@@ -198,6 +200,8 @@ var (
 
 	// For Intel RDT initialization
 	initOnce sync.Once
+
+	errNotFound = errors.New("Intel RDT resctrl mount point not found")
 )
 
 type intelRdtData struct {
@@ -271,7 +275,7 @@ func findIntelRdtMountpointDir(f io.Reader) (string, error) {
 		return "", err
 	}
 	if len(mi) < 1 {
-		return "", NewNotFoundError("Intel RDT")
+		return "", errNotFound
 	}
 
 	// Check if MBA Software Controller is enabled through mount option "-o mba_MBps"
@@ -366,24 +370,6 @@ func parseCpuInfoFile(path string) (cpuInfoFlags, error) {
 	return infoFlags, nil
 }
 
-func parseUint(s string, base, bitSize int) (uint64, error) {
-	value, err := strconv.ParseUint(s, base, bitSize)
-	if err != nil {
-		intValue, intErr := strconv.ParseInt(s, base, bitSize)
-		// 1. Handle negative values greater than MinInt64 (and)
-		// 2. Handle negative values lesser than MinInt64
-		if intErr == nil && intValue < 0 {
-			return 0, nil
-		} else if intErr != nil && intErr.(*strconv.NumError).Err == strconv.ErrRange && intValue < 0 {
-			return 0, nil
-		}
-
-		return value, err
-	}
-
-	return value, nil
-}
-
 // Gets a single uint64 value from the specified file.
 func getIntelRdtParamUint(path, file string) (uint64, error) {
 	fileName := filepath.Join(path, file)
@@ -392,7 +378,7 @@ func getIntelRdtParamUint(path, file string) (uint64, error) {
 		return 0, err
 	}
 
-	res, err := parseUint(string(bytes.TrimSpace(contents)), 10, 64)
+	res, err := fscommon.ParseUint(string(bytes.TrimSpace(contents)), 10, 64)
 	if err != nil {
 		return res, fmt.Errorf("unable to parse %q as a uint from file %q", string(contents), fileName)
 	}
@@ -414,7 +400,7 @@ func writeFile(dir, file, data string) error {
 		return fmt.Errorf("no such directory for %s", file)
 	}
 	if err := ioutil.WriteFile(filepath.Join(dir, file), []byte(data+"\n"), 0o600); err != nil {
-		return fmt.Errorf("failed to write %v to %v: %v", data, file, err)
+		return newLastCmdError(fmt.Errorf("intelrdt: unable to write %v: %w", data, err))
 	}
 	return nil
 }
@@ -515,13 +501,13 @@ func getLastCmdStatus() (string, error) {
 // WriteIntelRdtTasks writes the specified pid into the "tasks" file
 func WriteIntelRdtTasks(dir string, pid int) error {
 	if dir == "" {
-		return fmt.Errorf("no such directory for %s", IntelRdtTasks)
+		return fmt.Errorf("no such directory for %s", intelRdtTasks)
 	}
 
 	// Don't attach any pid if -1 is specified as a pid
 	if pid != -1 {
-		if err := ioutil.WriteFile(filepath.Join(dir, IntelRdtTasks), []byte(strconv.Itoa(pid)), 0o600); err != nil {
-			return fmt.Errorf("failed to write %v to %v: %v", pid, IntelRdtTasks, err)
+		if err := ioutil.WriteFile(filepath.Join(dir, intelRdtTasks), []byte(strconv.Itoa(pid)), 0o600); err != nil {
+			return newLastCmdError(fmt.Errorf("intelrdt: unable to add pid %d: %w", pid, err))
 		}
 	}
 	return nil
@@ -563,7 +549,7 @@ func (m *intelRdtManager) Apply(pid int) (err error) {
 		return nil
 	}
 	d, err := getIntelRdtData(m.config, pid)
-	if err != nil && !IsNotFound(err) {
+	if err != nil {
 		return err
 	}
 
@@ -607,7 +593,7 @@ func (m *intelRdtManager) GetStats() (*Stats, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	stats := NewStats()
+	stats := newStats()
 
 	rootPath, err := getIntelRdtRoot()
 	if err != nil {
@@ -739,21 +725,21 @@ func (m *intelRdtManager) Set(container *configs.Config) error {
 		// Write a single joint schema string to schemata file
 		if l3CacheSchema != "" && memBwSchema != "" {
 			if err := writeFile(path, "schemata", l3CacheSchema+"\n"+memBwSchema); err != nil {
-				return NewLastCmdError(err)
+				return err
 			}
 		}
 
 		// Write only L3 cache schema string to schemata file
 		if l3CacheSchema != "" && memBwSchema == "" {
 			if err := writeFile(path, "schemata", l3CacheSchema); err != nil {
-				return NewLastCmdError(err)
+				return err
 			}
 		}
 
 		// Write only memory bandwidth schema string to schemata file
 		if l3CacheSchema == "" && memBwSchema != "" {
 			if err := writeFile(path, "schemata", memBwSchema); err != nil {
-				return NewLastCmdError(err)
+				return err
 			}
 		}
 	}
@@ -764,53 +750,19 @@ func (m *intelRdtManager) Set(container *configs.Config) error {
 func (raw *intelRdtData) join(id string) (string, error) {
 	path := filepath.Join(raw.root, id)
 	if err := os.MkdirAll(path, 0o755); err != nil {
-		return "", NewLastCmdError(err)
+		return "", newLastCmdError(err)
 	}
 
 	if err := WriteIntelRdtTasks(path, raw.pid); err != nil {
-		return "", NewLastCmdError(err)
+		return "", err
 	}
 	return path, nil
 }
 
-type NotFoundError struct {
-	ResourceControl string
-}
-
-func (e *NotFoundError) Error() string {
-	return fmt.Sprintf("mountpoint for %s not found", e.ResourceControl)
-}
-
-func NewNotFoundError(res string) error {
-	return &NotFoundError{
-		ResourceControl: res,
-	}
-}
-
-func IsNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	_, ok := err.(*NotFoundError)
-	return ok
-}
-
-type LastCmdError struct {
-	LastCmdStatus string
-	Err           error
-}
-
-func (e *LastCmdError) Error() string {
-	return e.Err.Error() + ", last_cmd_status: " + e.LastCmdStatus
-}
-
-func NewLastCmdError(err error) error {
-	lastCmdStatus, err1 := getLastCmdStatus()
+func newLastCmdError(err error) error {
+	status, err1 := getLastCmdStatus()
 	if err1 == nil {
-		return &LastCmdError{
-			LastCmdStatus: lastCmdStatus,
-			Err:           err,
-		}
+		return fmt.Errorf("%w, last_cmd_status: %s", err, status)
 	}
 	return err
 }

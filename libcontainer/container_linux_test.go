@@ -42,7 +42,7 @@ func (m *mockCgroupManager) Apply(pid int) error {
 	return nil
 }
 
-func (m *mockCgroupManager) Set(container *configs.Config) error {
+func (m *mockCgroupManager) Set(_ *configs.Resources) error {
 	return nil
 }
 
@@ -333,9 +333,7 @@ func TestGetContainerState(t *testing.T) {
 }
 
 func TestGetContainerStateAfterUpdate(t *testing.T) {
-	var (
-		pid = os.Getpid()
-	)
+	pid := os.Getpid()
 	stat, err := system.Stat(pid)
 	if err != nil {
 		t.Fatal(err)

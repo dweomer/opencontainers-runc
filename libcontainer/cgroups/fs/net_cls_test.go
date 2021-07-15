@@ -24,7 +24,7 @@ func TestNetClsSetClassid(t *testing.T) {
 
 	helper.CgroupData.config.Resources.NetClsClassid = classidAfter
 	netcls := &NetClsGroup{}
-	if err := netcls.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := netcls.Set(helper.CgroupPath, helper.CgroupData.config.Resources); err != nil {
 		t.Fatal(err)
 	}
 
@@ -33,7 +33,7 @@ func TestNetClsSetClassid(t *testing.T) {
 	// So. we just judge if we successfully write classid into file
 	value, err := fscommon.GetCgroupParamUint(helper.CgroupPath, "net_cls.classid")
 	if err != nil {
-		t.Fatalf("Failed to parse net_cls.classid - %s", err)
+		t.Fatal(err)
 	}
 	if value != classidAfter {
 		t.Fatal("Got the wrong value, set net_cls.classid failed.")

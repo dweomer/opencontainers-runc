@@ -4,16 +4,17 @@ package fs2
 
 import (
 	"bufio"
+	"errors"
 	"math"
 	"os"
 	"strconv"
 	"strings"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/opencontainers/runc/libcontainer/cgroups"
 	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
 	"github.com/opencontainers/runc/libcontainer/configs"
-	"github.com/pkg/errors"
-	"golang.org/x/sys/unix"
 )
 
 // numToStr converts an int64 value to a string for writing to a
@@ -33,41 +34,40 @@ func numToStr(value int64) (ret string) {
 	return ret
 }
 
-func isMemorySet(cgroup *configs.Cgroup) bool {
-	return cgroup.Resources.MemoryReservation != 0 ||
-		cgroup.Resources.Memory != 0 || cgroup.Resources.MemorySwap != 0
+func isMemorySet(r *configs.Resources) bool {
+	return r.MemoryReservation != 0 || r.Memory != 0 || r.MemorySwap != 0
 }
 
-func setMemory(dirPath string, cgroup *configs.Cgroup) error {
-	if !isMemorySet(cgroup) {
+func setMemory(dirPath string, r *configs.Resources) error {
+	if !isMemorySet(r) {
 		return nil
 	}
-	swap, err := cgroups.ConvertMemorySwapToCgroupV2Value(cgroup.Resources.MemorySwap, cgroup.Resources.Memory)
+	swap, err := cgroups.ConvertMemorySwapToCgroupV2Value(r.MemorySwap, r.Memory)
 	if err != nil {
 		return err
 	}
 	swapStr := numToStr(swap)
-	if swapStr == "" && swap == 0 && cgroup.Resources.MemorySwap > 0 {
+	if swapStr == "" && swap == 0 && r.MemorySwap > 0 {
 		// memory and memorySwap set to the same value -- disable swap
 		swapStr = "0"
 	}
 	// never write empty string to `memory.swap.max`, it means set to 0.
 	if swapStr != "" {
-		if err := fscommon.WriteFile(dirPath, "memory.swap.max", swapStr); err != nil {
+		if err := cgroups.WriteFile(dirPath, "memory.swap.max", swapStr); err != nil {
 			return err
 		}
 	}
 
-	if val := numToStr(cgroup.Resources.Memory); val != "" {
-		if err := fscommon.WriteFile(dirPath, "memory.max", val); err != nil {
+	if val := numToStr(r.Memory); val != "" {
+		if err := cgroups.WriteFile(dirPath, "memory.max", val); err != nil {
 			return err
 		}
 	}
 
 	// cgroup.Resources.KernelMemory is ignored
 
-	if val := numToStr(cgroup.Resources.MemoryReservation); val != "" {
-		if err := fscommon.WriteFile(dirPath, "memory.low", val); err != nil {
+	if val := numToStr(r.MemoryReservation); val != "" {
+		if err := cgroups.WriteFile(dirPath, "memory.low", val); err != nil {
 			return err
 		}
 	}
@@ -76,8 +76,8 @@ func setMemory(dirPath string, cgroup *configs.Cgroup) error {
 }
 
 func statMemory(dirPath string, stats *cgroups.Stats) error {
-	// Set stats from memory.stat.
-	statsFile, err := fscommon.OpenFile(dirPath, "memory.stat", os.O_RDONLY)
+	const file = "memory.stat"
+	statsFile, err := cgroups.OpenFile(dirPath, file, os.O_RDONLY)
 	if err != nil {
 		return err
 	}
@@ -87,9 +87,12 @@ func statMemory(dirPath string, stats *cgroups.Stats) error {
 	for sc.Scan() {
 		t, v, err := fscommon.ParseKeyValue(sc.Text())
 		if err != nil {
-			return errors.Wrapf(err, "failed to parse memory.stat (%q)", sc.Text())
+			return &parseError{Path: dirPath, File: file, Err: err}
 		}
 		stats.MemoryStats.Stats[t] = v
+	}
+	if err := sc.Err(); err != nil {
+		return &parseError{Path: dirPath, File: file, Err: err}
 	}
 	stats.MemoryStats.Cache = stats.MemoryStats.Stats["file"]
 	// Unlike cgroup v1 which has memory.use_hierarchy binary knob,
@@ -140,13 +143,13 @@ func getMemoryDataV2(path, name string) (cgroups.MemoryData, error) {
 			// swapaccount=0 kernel boot parameter is given.
 			return cgroups.MemoryData{}, nil
 		}
-		return cgroups.MemoryData{}, errors.Wrapf(err, "failed to parse %s", usage)
+		return cgroups.MemoryData{}, err
 	}
 	memoryData.Usage = value
 
 	value, err = fscommon.GetCgroupParamUint(path, limit)
 	if err != nil {
-		return cgroups.MemoryData{}, errors.Wrapf(err, "failed to parse %s", limit)
+		return cgroups.MemoryData{}, err
 	}
 	memoryData.Limit = value
 
@@ -154,7 +157,8 @@ func getMemoryDataV2(path, name string) (cgroups.MemoryData, error) {
 }
 
 func statsFromMeminfo(stats *cgroups.Stats) error {
-	f, err := os.Open("/proc/meminfo")
+	const file = "/proc/meminfo"
+	f, err := os.Open(file)
 	if err != nil {
 		return err
 	}
@@ -191,7 +195,7 @@ func statsFromMeminfo(stats *cgroups.Stats) error {
 		vStr := strings.TrimSpace(strings.TrimSuffix(parts[1], " kB"))
 		*p, err = strconv.ParseUint(vStr, 10, 64)
 		if err != nil {
-			return errors.Wrap(err, "parsing /proc/meminfo "+k)
+			return &parseError{File: file, Err: errors.New("bad value for " + k)}
 		}
 
 		found++
@@ -200,8 +204,8 @@ func statsFromMeminfo(stats *cgroups.Stats) error {
 			break
 		}
 	}
-	if sc.Err() != nil {
-		return sc.Err()
+	if err := sc.Err(); err != nil {
+		return &parseError{Path: "", File: file, Err: err}
 	}
 
 	stats.MemoryStats.SwapUsage.Usage = (swap_total - swap_free) * 1024
