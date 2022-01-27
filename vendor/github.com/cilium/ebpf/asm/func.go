@@ -132,6 +132,71 @@ const (
 	FnSkStorageDelete
 	FnSendSignal
 	FnTcpGenSyncookie
+	FnSkbOutput
+	FnProbeReadUser
+	FnProbeReadKernel
+	FnProbeReadUserStr
+	FnProbeReadKernelStr
+	FnTcpSendAck
+	FnSendSignalThread
+	FnJiffies64
+	FnReadBranchRecords
+	FnGetNsCurrentPidTgid
+	FnXdpOutput
+	FnGetNetnsCookie
+	FnGetCurrentAncestorCgroupId
+	FnSkAssign
+	FnKtimeGetBootNs
+	FnSeqPrintf
+	FnSeqWrite
+	FnSkCgroupId
+	FnSkAncestorCgroupId
+	FnRingbufOutput
+	FnRingbufReserve
+	FnRingbufSubmit
+	FnRingbufDiscard
+	FnRingbufQuery
+	FnCsumLevel
+	FnSkcToTcp6Sock
+	FnSkcToTcpSock
+	FnSkcToTcpTimewaitSock
+	FnSkcToTcpRequestSock
+	FnSkcToUdp6Sock
+	FnGetTaskStack
+	FnLoadHdrOpt
+	FnStoreHdrOpt
+	FnReserveHdrOpt
+	FnInodeStorageGet
+	FnInodeStorageDelete
+	FnDPath
+	FnCopyFromUser
+	FnSnprintfBtf
+	FnSeqPrintfBtf
+	FnSkbCgroupClassid
+	FnRedirectNeigh
+	FnPerCpuPtr
+	FnThisCpuPtr
+	FnRedirectPeer
+	FnTaskStorageGet
+	FnTaskStorageDelete
+	FnGetCurrentTaskBtf
+	FnBprmOptsSet
+	FnKtimeGetCoarseNs
+	FnImaInodeHash
+	FnSockFromFile
+	FnCheckMtu
+	FnForEachMapElem
+	FnSnprintf
+	FnSysBpf
+	FnBtfFindByNameKind
+	FnSysClose
+	FnTimerInit
+	FnTimerSetCallback
+	FnTimerStart
+	FnTimerCancel
+	FnGetFuncIp
+	FnGetAttachCookie
+	FnTaskPtRegs
 )
 
 // Call emits a function call.

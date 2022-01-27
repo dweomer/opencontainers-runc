@@ -6,4 +6,7 @@ run:
 
 linters:
   enable:
-    - gofmt
+    - gofumpt
+    - errorlint
+    - unconvert
+    - unparam

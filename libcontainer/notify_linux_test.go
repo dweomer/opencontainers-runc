@@ -1,11 +1,8 @@
-// +build linux
-
 package libcontainer
 
 import (
 	"encoding/binary"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,16 +14,13 @@ import (
 type notifyFunc func(path string) (<-chan struct{}, error)
 
 func testMemoryNotification(t *testing.T, evName string, notify notifyFunc, targ string) {
-	memoryPath, err := ioutil.TempDir("", "testmemnotification-"+evName)
-	if err != nil {
-		t.Fatal(err)
-	}
+	memoryPath := t.TempDir()
 	evFile := filepath.Join(memoryPath, evName)
 	eventPath := filepath.Join(memoryPath, "cgroup.event_control")
-	if err := ioutil.WriteFile(evFile, []byte{}, 0700); err != nil {
+	if err := os.WriteFile(evFile, []byte{}, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := ioutil.WriteFile(eventPath, []byte{}, 0700); err != nil {
+	if err := os.WriteFile(eventPath, []byte{}, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	ch, err := notify(memoryPath)
@@ -34,7 +28,7 @@ func testMemoryNotification(t *testing.T, evName string, notify notifyFunc, targ
 		t.Fatal("expected no error, got:", err)
 	}
 
-	data, err := ioutil.ReadFile(eventPath)
+	data, err := os.ReadFile(eventPath)
 	if err != nil {
 		t.Fatal("couldn't read event control file:", err)
 	}

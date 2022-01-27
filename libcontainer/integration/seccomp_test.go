@@ -1,3 +1,4 @@
+//go:build linux && cgo && seccomp
 // +build linux,cgo,seccomp
 
 package integration
@@ -17,15 +18,9 @@ func TestSeccompDenyGetcwdWithErrno(t *testing.T) {
 		return
 	}
 
-	rootfs, err := newRootfs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove(rootfs)
-
 	errnoRet := uint(syscall.ESRCH)
 
-	config := newTemplateConfig(&tParam{rootfs: rootfs})
+	config := newTemplateConfig(t, nil)
 	config.Seccomp = &configs.Seccomp{
 		DefaultAction: configs.Allow,
 		Syscalls: []*configs.Syscall{
@@ -37,11 +32,9 @@ func TestSeccompDenyGetcwdWithErrno(t *testing.T) {
 		},
 	}
 
-	container, err := newContainer(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer container.Destroy()
+	container, err := newContainer(t, config)
+	ok(t, err)
+	defer container.Destroy() //nolint:errcheck
 
 	buffers := newStdBuffers()
 	pwd := &libcontainer.Process{
@@ -55,9 +48,7 @@ func TestSeccompDenyGetcwdWithErrno(t *testing.T) {
 	}
 
 	err = container.Run(pwd)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 	ps, err := pwd.Wait()
 	if err == nil {
 		t.Fatal("Expecting error (negative return code); instead exited cleanly!")
@@ -89,13 +80,7 @@ func TestSeccompDenyGetcwd(t *testing.T) {
 		return
 	}
 
-	rootfs, err := newRootfs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove(rootfs)
-
-	config := newTemplateConfig(&tParam{rootfs: rootfs})
+	config := newTemplateConfig(t, nil)
 	config.Seccomp = &configs.Seccomp{
 		DefaultAction: configs.Allow,
 		Syscalls: []*configs.Syscall{
@@ -106,11 +91,9 @@ func TestSeccompDenyGetcwd(t *testing.T) {
 		},
 	}
 
-	container, err := newContainer(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer container.Destroy()
+	container, err := newContainer(t, config)
+	ok(t, err)
+	defer container.Destroy() //nolint:errcheck
 
 	buffers := newStdBuffers()
 	pwd := &libcontainer.Process{
@@ -124,9 +107,7 @@ func TestSeccompDenyGetcwd(t *testing.T) {
 	}
 
 	err = container.Run(pwd)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 	ps, err := pwd.Wait()
 	if err == nil {
 		t.Fatal("Expecting error (negative return code); instead exited cleanly!")
@@ -158,13 +139,7 @@ func TestSeccompPermitWriteConditional(t *testing.T) {
 		return
 	}
 
-	rootfs, err := newRootfs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove(rootfs)
-
-	config := newTemplateConfig(&tParam{rootfs: rootfs})
+	config := newTemplateConfig(t, nil)
 	config.Seccomp = &configs.Seccomp{
 		DefaultAction: configs.Allow,
 		Syscalls: []*configs.Syscall{
@@ -182,11 +157,9 @@ func TestSeccompPermitWriteConditional(t *testing.T) {
 		},
 	}
 
-	container, err := newContainer(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer container.Destroy()
+	container, err := newContainer(t, config)
+	ok(t, err)
+	defer container.Destroy() //nolint:errcheck
 
 	buffers := newStdBuffers()
 	dmesg := &libcontainer.Process{
@@ -200,9 +173,7 @@ func TestSeccompPermitWriteConditional(t *testing.T) {
 	}
 
 	err = container.Run(dmesg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 	if _, err := dmesg.Wait(); err != nil {
 		t.Fatalf("%s: %s", err, buffers.Stderr)
 	}
@@ -220,13 +191,7 @@ func TestSeccompDenyWriteConditional(t *testing.T) {
 		return
 	}
 
-	rootfs, err := newRootfs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove(rootfs)
-
-	config := newTemplateConfig(&tParam{rootfs: rootfs})
+	config := newTemplateConfig(t, nil)
 	config.Seccomp = &configs.Seccomp{
 		DefaultAction: configs.Allow,
 		Syscalls: []*configs.Syscall{
@@ -244,11 +209,9 @@ func TestSeccompDenyWriteConditional(t *testing.T) {
 		},
 	}
 
-	container, err := newContainer(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer container.Destroy()
+	container, err := newContainer(t, config)
+	ok(t, err)
+	defer container.Destroy() //nolint:errcheck
 
 	buffers := newStdBuffers()
 	dmesg := &libcontainer.Process{
@@ -262,9 +225,7 @@ func TestSeccompDenyWriteConditional(t *testing.T) {
 	}
 
 	err = container.Run(dmesg)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ok(t, err)
 
 	ps, err := dmesg.Wait()
 	if err == nil {
@@ -298,13 +259,7 @@ func TestSeccompPermitWriteMultipleConditions(t *testing.T) {
 		return
 	}
 
-	rootfs, err := newRootfs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove(rootfs)
-
-	config := newTemplateConfig(&tParam{rootfs: rootfs})
+	config := newTemplateConfig(t, nil)
 	config.Seccomp = &configs.Seccomp{
 		DefaultAction: configs.Allow,
 		Syscalls: []*configs.Syscall{
@@ -327,7 +282,7 @@ func TestSeccompPermitWriteMultipleConditions(t *testing.T) {
 		},
 	}
 
-	buffers, exitCode, err := runContainer(config, "", "ls", "/")
+	buffers, exitCode, err := runContainer(t, config, "ls", "/")
 	if err != nil {
 		t.Fatalf("%s: %s", buffers, err)
 	}
@@ -353,13 +308,7 @@ func TestSeccompDenyWriteMultipleConditions(t *testing.T) {
 		return
 	}
 
-	rootfs, err := newRootfs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove(rootfs)
-
-	config := newTemplateConfig(&tParam{rootfs: rootfs})
+	config := newTemplateConfig(t, nil)
 	config.Seccomp = &configs.Seccomp{
 		DefaultAction: configs.Allow,
 		Syscalls: []*configs.Syscall{
@@ -382,7 +331,7 @@ func TestSeccompDenyWriteMultipleConditions(t *testing.T) {
 		},
 	}
 
-	buffers, exitCode, err := runContainer(config, "", "ls", "/does_not_exist")
+	buffers, exitCode, err := runContainer(t, config, "ls", "/does_not_exist")
 	if err == nil {
 		t.Fatalf("Expecting error return, instead got 0")
 	}
@@ -402,14 +351,8 @@ func TestSeccompMultipleConditionSameArgDeniesStdout(t *testing.T) {
 		return
 	}
 
-	rootfs, err := newRootfs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove(rootfs)
-
-	// Prevent writing to both stdout and stderr
-	config := newTemplateConfig(&tParam{rootfs: rootfs})
+	// Prevent writing to both stdout and stderr.
+	config := newTemplateConfig(t, nil)
 	config.Seccomp = &configs.Seccomp{
 		DefaultAction: configs.Allow,
 		Syscalls: []*configs.Syscall{
@@ -432,7 +375,7 @@ func TestSeccompMultipleConditionSameArgDeniesStdout(t *testing.T) {
 		},
 	}
 
-	buffers, exitCode, err := runContainer(config, "", "ls", "/")
+	buffers, exitCode, err := runContainer(t, config, "ls", "/")
 	if err != nil {
 		t.Fatalf("%s: %s", buffers, err)
 	}
@@ -450,14 +393,8 @@ func TestSeccompMultipleConditionSameArgDeniesStderr(t *testing.T) {
 		return
 	}
 
-	rootfs, err := newRootfs()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer remove(rootfs)
-
-	// Prevent writing to both stdout and stderr
-	config := newTemplateConfig(&tParam{rootfs: rootfs})
+	// Prevent writing to both stdout and stderr.
+	config := newTemplateConfig(t, nil)
 	config.Seccomp = &configs.Seccomp{
 		DefaultAction: configs.Allow,
 		Syscalls: []*configs.Syscall{
@@ -480,7 +417,7 @@ func TestSeccompMultipleConditionSameArgDeniesStderr(t *testing.T) {
 		},
 	}
 
-	buffers, exitCode, err := runContainer(config, "", "ls", "/does_not_exist")
+	buffers, exitCode, err := runContainer(t, config, "ls", "/does_not_exist")
 	if err == nil {
 		t.Fatalf("Expecting error return, instead got 0")
 	}

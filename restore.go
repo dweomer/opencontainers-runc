@@ -1,5 +1,3 @@
-// +build linux
-
 package main
 
 import (
@@ -91,6 +89,16 @@ using the runc checkpoint command.`,
 			Name:  "lazy-pages",
 			Usage: "use userfaultfd to lazily restore memory pages",
 		},
+		cli.StringFlag{
+			Name:  "lsm-profile",
+			Value: "",
+			Usage: "Specify an LSM profile to be used during restore in the form of TYPE:NAME.",
+		},
+		cli.StringFlag{
+			Name:  "lsm-mount-context",
+			Value: "",
+			Usage: "Specify an LSM mount context to be used during restore.",
+		},
 	},
 	Action: func(context *cli.Context) error {
 		if err := checkArgs(context, 1, exactArgs); err != nil {
@@ -101,15 +109,11 @@ using the runc checkpoint command.`,
 			logrus.Warn("runc checkpoint is untested with rootless containers")
 		}
 
-		spec, err := setupSpec(context)
-		if err != nil {
-			return err
-		}
 		options := criuOptions(context)
 		if err := setEmptyNsMask(context, options); err != nil {
 			return err
 		}
-		status, err := startContainer(context, spec, CT_ACT_RESTORE, options)
+		status, err := startContainer(context, CT_ACT_RESTORE, options)
 		if err != nil {
 			return err
 		}
@@ -121,14 +125,15 @@ using the runc checkpoint command.`,
 }
 
 func criuOptions(context *cli.Context) *libcontainer.CriuOpts {
-	imagePath := getCheckpointImagePath(context)
-	if err := os.MkdirAll(imagePath, 0755); err != nil {
+	imagePath, parentPath, err := prepareImagePaths(context)
+	if err != nil {
 		fatal(err)
 	}
+
 	return &libcontainer.CriuOpts{
 		ImagesDirectory:         imagePath,
 		WorkDirectory:           context.String("work-path"),
-		ParentImage:             context.String("parent-path"),
+		ParentImage:             parentPath,
 		LeaveRunning:            context.Bool("leave-running"),
 		TcpEstablished:          context.Bool("tcp-established"),
 		ExternalUnixConnections: context.Bool("ext-unix-sk"),
@@ -138,5 +143,7 @@ func criuOptions(context *cli.Context) *libcontainer.CriuOpts {
 		AutoDedup:               context.Bool("auto-dedup"),
 		LazyPages:               context.Bool("lazy-pages"),
 		StatusFd:                context.Int("status-fd"),
+		LsmProfile:              context.String("lsm-profile"),
+		LsmMountContext:         context.String("lsm-mount-context"),
 	}
 }

@@ -1,13 +1,11 @@
-package validate_test
+package validate
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/opencontainers/runc/libcontainer/configs"
-	"github.com/opencontainers/runc/libcontainer/configs/validate"
 	"golang.org/x/sys/unix"
 )
 
@@ -16,7 +14,7 @@ func TestValidate(t *testing.T) {
 		Rootfs: "/var",
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err != nil {
 		t.Errorf("Expected error to not occur: %+v", err)
@@ -34,7 +32,7 @@ func TestValidateWithInvalidRootfs(t *testing.T) {
 		Rootfs: dir,
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err == nil {
 		t.Error("Expected error to occur but it was nil")
@@ -49,7 +47,7 @@ func TestValidateNetworkWithoutNETNamespace(t *testing.T) {
 		Networks:   []*configs.Network{network},
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err == nil {
 		t.Error("Expected error to occur but it was nil")
@@ -64,7 +62,7 @@ func TestValidateNetworkRoutesWithoutNETNamespace(t *testing.T) {
 		Routes:     []*configs.Route{route},
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err == nil {
 		t.Error("Expected error to occur but it was nil")
@@ -82,7 +80,7 @@ func TestValidateHostname(t *testing.T) {
 		),
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err != nil {
 		t.Errorf("Expected error to not occur: %+v", err)
@@ -95,7 +93,7 @@ func TestValidateHostnameWithoutUTSNamespace(t *testing.T) {
 		Hostname: "runc",
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err == nil {
 		t.Error("Expected error to occur but it was nil")
@@ -113,7 +111,7 @@ func TestValidateSecurityWithMaskPaths(t *testing.T) {
 		),
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err != nil {
 		t.Errorf("Expected error to not occur: %+v", err)
@@ -131,7 +129,7 @@ func TestValidateSecurityWithROPaths(t *testing.T) {
 		),
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err != nil {
 		t.Errorf("Expected error to not occur: %+v", err)
@@ -145,7 +143,7 @@ func TestValidateSecurityWithoutNEWNS(t *testing.T) {
 		ReadonlyPaths: []string{"/proc/sys"},
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err == nil {
 		t.Error("Expected error to occur but it was nil")
@@ -154,7 +152,7 @@ func TestValidateSecurityWithoutNEWNS(t *testing.T) {
 
 func TestValidateUsernamespace(t *testing.T) {
 	if _, err := os.Stat("/proc/self/ns/user"); os.IsNotExist(err) {
-		t.Skip("userns is unsupported")
+		t.Skip("Test requires userns.")
 	}
 	config := &configs.Config{
 		Rootfs: "/var",
@@ -165,7 +163,7 @@ func TestValidateUsernamespace(t *testing.T) {
 		),
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err != nil {
 		t.Errorf("expected error to not occur %+v", err)
@@ -179,18 +177,47 @@ func TestValidateUsernamespaceWithoutUserNS(t *testing.T) {
 		UidMappings: []configs.IDMap{uidMap},
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err == nil {
 		t.Error("Expected error to occur but it was nil")
 	}
 }
 
+// TestConvertSysctlVariableToDotsSeparator tests whether the sysctl variable
+// can be correctly converted to a dot as a separator.
+func TestConvertSysctlVariableToDotsSeparator(t *testing.T) {
+	type testCase struct {
+		in  string
+		out string
+	}
+	valid := []testCase{
+		{in: "kernel.shm_rmid_forced", out: "kernel.shm_rmid_forced"},
+		{in: "kernel/shm_rmid_forced", out: "kernel.shm_rmid_forced"},
+		{in: "net.ipv4.conf.eno2/100.rp_filter", out: "net.ipv4.conf.eno2/100.rp_filter"},
+		{in: "net/ipv4/conf/eno2.100/rp_filter", out: "net.ipv4.conf.eno2/100.rp_filter"},
+		{in: "net/ipv4/ip_local_port_range", out: "net.ipv4.ip_local_port_range"},
+		{in: "kernel/msgmax", out: "kernel.msgmax"},
+		{in: "kernel/sem", out: "kernel.sem"},
+	}
+
+	for _, test := range valid {
+		convertSysctlVal := convertSysctlVariableToDotsSeparator(test.in)
+		if convertSysctlVal != test.out {
+			t.Errorf("The sysctl variable was not converted correctly. got: %s, want: %s", convertSysctlVal, test.out)
+		}
+	}
+}
+
 func TestValidateSysctl(t *testing.T) {
 	sysctl := map[string]string{
-		"fs.mqueue.ctl": "ctl",
-		"net.ctl":       "ctl",
-		"kernel.ctl":    "ctl",
+		"fs.mqueue.ctl":                    "ctl",
+		"fs/mqueue/ctl":                    "ctl",
+		"net.ctl":                          "ctl",
+		"net/ctl":                          "ctl",
+		"net.ipv4.conf.eno2/100.rp_filter": "ctl",
+		"kernel.ctl":                       "ctl",
+		"kernel/ctl":                       "ctl",
 	}
 
 	for k, v := range sysctl {
@@ -199,7 +226,7 @@ func TestValidateSysctl(t *testing.T) {
 			Sysctl: map[string]string{k: v},
 		}
 
-		validator := validate.New()
+		validator := New()
 		err := validator.Validate(config)
 		if err == nil {
 			t.Error("Expected error to occur but it was nil")
@@ -209,9 +236,13 @@ func TestValidateSysctl(t *testing.T) {
 
 func TestValidateValidSysctl(t *testing.T) {
 	sysctl := map[string]string{
-		"fs.mqueue.ctl": "ctl",
-		"net.ctl":       "ctl",
-		"kernel.msgmax": "ctl",
+		"fs.mqueue.ctl":                    "ctl",
+		"fs/mqueue/ctl":                    "ctl",
+		"net.ctl":                          "ctl",
+		"net/ctl":                          "ctl",
+		"net.ipv4.conf.eno2/100.rp_filter": "ctl",
+		"kernel.msgmax":                    "ctl",
+		"kernel/msgmax":                    "ctl",
 	}
 
 	for k, v := range sysctl {
@@ -228,7 +259,7 @@ func TestValidateValidSysctl(t *testing.T) {
 			},
 		}
 
-		validator := validate.New()
+		validator := New()
 		err := validator.Validate(config)
 		if err != nil {
 			t.Errorf("Expected error to not occur with {%s=%s} but got: %q", k, v, err)
@@ -250,7 +281,7 @@ func TestValidateSysctlWithSameNs(t *testing.T) {
 		),
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err == nil {
 		t.Error("Expected error to occur but it was nil")
@@ -264,13 +295,7 @@ func TestValidateSysctlWithBindHostNetNS(t *testing.T) {
 
 	const selfnet = "/proc/self/ns/net"
 
-	dir, err := ioutil.TempDir("", t.Name()+"-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.Remove(dir)
-
-	file := filepath.Join(dir, "default")
+	file := filepath.Join(t.TempDir(), "default")
 	fd, err := os.Create(file)
 	if err != nil {
 		t.Fatal(err)
@@ -298,7 +323,7 @@ func TestValidateSysctlWithBindHostNetNS(t *testing.T) {
 		),
 	}
 
-	validator := validate.New()
+	validator := New()
 	if err := validator.Validate(config); err == nil {
 		t.Error("Expected error to occur but it was nil")
 	}
@@ -311,7 +336,7 @@ func TestValidateSysctlWithoutNETNamespace(t *testing.T) {
 		Namespaces: []configs.Namespace{},
 	}
 
-	validator := validate.New()
+	validator := New()
 	err := validator.Validate(config)
 	if err == nil {
 		t.Error("Expected error to occur but it was nil")
@@ -323,15 +348,17 @@ func TestValidateMounts(t *testing.T) {
 		isErr bool
 		dest  string
 	}{
-		{isErr: true, dest: "not/an/abs/path"},
-		{isErr: true, dest: "./rel/path"},
-		{isErr: true, dest: "./rel/path"},
-		{isErr: true, dest: "../../path"},
+		// TODO (runc v1.x.x): make these relative paths an error. See https://github.com/opencontainers/runc/pull/3004
+		{isErr: false, dest: "not/an/abs/path"},
+		{isErr: false, dest: "./rel/path"},
+		{isErr: false, dest: "./rel/path"},
+		{isErr: false, dest: "../../path"},
+
 		{isErr: false, dest: "/abs/path"},
 		{isErr: false, dest: "/abs/but/../unclean"},
 	}
 
-	validator := validate.New()
+	validator := New()
 
 	for _, tc := range testCases {
 		config := &configs.Config{

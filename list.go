@@ -1,18 +1,14 @@
-// +build linux
-
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"syscall"
 	"text/tabwriter"
 	"time"
-
-	"encoding/json"
 
 	"github.com/opencontainers/runc/libcontainer"
 	"github.com/opencontainers/runc/libcontainer/user"
@@ -124,53 +120,62 @@ func getContainers(context *cli.Context) ([]containerState, error) {
 	if err != nil {
 		return nil, err
 	}
-	list, err := ioutil.ReadDir(absRoot)
+	list, err := os.ReadDir(absRoot)
 	if err != nil {
 		fatal(err)
 	}
 
 	var s []containerState
 	for _, item := range list {
-		if item.IsDir() {
-			// This cast is safe on Linux.
-			stat := item.Sys().(*syscall.Stat_t)
-			owner, err := user.LookupUid(int(stat.Uid))
-			if err != nil {
-				owner.Name = fmt.Sprintf("#%d", stat.Uid)
-			}
-
-			container, err := factory.Load(item.Name())
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "load container %s: %v\n", item.Name(), err)
-				continue
-			}
-			containerStatus, err := container.Status()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "status for %s: %v\n", item.Name(), err)
-				continue
-			}
-			state, err := container.State()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "state for %s: %v\n", item.Name(), err)
-				continue
-			}
-			pid := state.BaseState.InitProcessPid
-			if containerStatus == libcontainer.Stopped {
-				pid = 0
-			}
-			bundle, annotations := utils.Annotations(state.Config.Labels)
-			s = append(s, containerState{
-				Version:        state.BaseState.Config.Version,
-				ID:             state.BaseState.ID,
-				InitProcessPid: pid,
-				Status:         containerStatus.String(),
-				Bundle:         bundle,
-				Rootfs:         state.BaseState.Config.Rootfs,
-				Created:        state.BaseState.Created,
-				Annotations:    annotations,
-				Owner:          owner.Name,
-			})
+		if !item.IsDir() {
+			continue
 		}
+		st, err := item.Info()
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				// Possible race with runc delete.
+				continue
+			}
+			fatal(err)
+		}
+		// This cast is safe on Linux.
+		uid := st.Sys().(*syscall.Stat_t).Uid
+		owner, err := user.LookupUid(int(uid))
+		if err != nil {
+			owner.Name = fmt.Sprintf("#%d", uid)
+		}
+
+		container, err := factory.Load(item.Name())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "load container %s: %v\n", item.Name(), err)
+			continue
+		}
+		containerStatus, err := container.Status()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "status for %s: %v\n", item.Name(), err)
+			continue
+		}
+		state, err := container.State()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "state for %s: %v\n", item.Name(), err)
+			continue
+		}
+		pid := state.BaseState.InitProcessPid
+		if containerStatus == libcontainer.Stopped {
+			pid = 0
+		}
+		bundle, annotations := utils.Annotations(state.Config.Labels)
+		s = append(s, containerState{
+			Version:        state.BaseState.Config.Version,
+			ID:             state.BaseState.ID,
+			InitProcessPid: pid,
+			Status:         containerStatus.String(),
+			Bundle:         bundle,
+			Rootfs:         state.BaseState.Config.Rootfs,
+			Created:        state.BaseState.Created,
+			Annotations:    annotations,
+			Owner:          owner.Name,
+		})
 	}
 	return s, nil
 }

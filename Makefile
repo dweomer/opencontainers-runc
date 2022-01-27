@@ -1,5 +1,5 @@
 CONTAINER_ENGINE := docker
-GO := go
+GO ?= go
 
 PREFIX ?= /usr/local
 BINDIR := $(PREFIX)/sbin
@@ -10,8 +10,7 @@ GIT_BRANCH_CLEAN := $(shell echo $(GIT_BRANCH) | sed -e "s/[^[:alnum:]]/-/g")
 RUNC_IMAGE := runc_dev$(if $(GIT_BRANCH_CLEAN),:$(GIT_BRANCH_CLEAN))
 PROJECT := github.com/opencontainers/runc
 BUILDTAGS ?= seccomp
-COMMIT_NO := $(shell git rev-parse HEAD 2> /dev/null || true)
-COMMIT ?= $(if $(shell git status --porcelain --untracked-files=no),"$(COMMIT_NO)-dirty","$(COMMIT_NO)")
+COMMIT ?= $(shell git describe --dirty --long --always)
 VERSION := $(shell cat ./VERSION)
 
 ifeq ($(shell $(GO) env GOOS),linux)
@@ -24,24 +23,35 @@ endif
 GO_BUILD := $(GO) build -trimpath $(GO_BUILDMODE) $(EXTRA_FLAGS) -tags "$(BUILDTAGS)" \
 	-ldflags "-X main.gitCommit=$(COMMIT) -X main.version=$(VERSION) $(EXTRA_LDFLAGS)"
 GO_BUILD_STATIC := CGO_ENABLED=1 $(GO) build -trimpath $(EXTRA_FLAGS) -tags "$(BUILDTAGS) netgo osusergo" \
-	-ldflags "-w -extldflags -static -X main.gitCommit=$(COMMIT) -X main.version=$(VERSION) $(EXTRA_LDFLAGS)"
+	-ldflags "-extldflags -static -X main.gitCommit=$(COMMIT) -X main.version=$(VERSION) $(EXTRA_LDFLAGS)"
+
+GPG_KEYID ?= asarai@suse.de
 
 .DEFAULT: runc
 
 runc:
 	$(GO_BUILD) -o runc .
 
-all: runc recvtty
+all: runc recvtty sd-helper seccompagent
 
-recvtty:
-	$(GO_BUILD) -o contrib/cmd/recvtty/recvtty ./contrib/cmd/recvtty
+recvtty sd-helper seccompagent:
+	$(GO_BUILD) -o contrib/cmd/$@/$@ ./contrib/cmd/$@
 
 static:
 	$(GO_BUILD_STATIC) -o runc .
-	$(GO_BUILD_STATIC) -o contrib/cmd/recvtty/recvtty ./contrib/cmd/recvtty
 
-release:
-	script/release.sh -r release/$(VERSION) -v $(VERSION)
+releaseall: RELEASE_ARGS := "-a arm64 -a armel -a armhf -a ppc64le -a s390x"
+releaseall: release
+
+release: runcimage
+	$(CONTAINER_ENGINE) run $(CONTAINER_ENGINE_RUN_FLAGS) \
+		--rm -v $(CURDIR):/go/src/$(PROJECT) \
+		-e RELEASE_ARGS=$(RELEASE_ARGS) \
+		$(RUNC_IMAGE) make localrelease
+	script/release_sign.sh -S $(GPG_KEYID) -r release/$(VERSION) -v $(VERSION)
+
+localrelease:
+	script/release_build.sh -r release/$(VERSION) -v $(VERSION) $(RELEASE_ARGS)
 
 dbuild: runcimage
 	$(CONTAINER_ENGINE) run $(CONTAINER_ENGINE_RUN_FLAGS) \
@@ -111,6 +121,8 @@ install-man: man
 clean:
 	rm -f runc runc-*
 	rm -f contrib/cmd/recvtty/recvtty
+	rm -f contrib/cmd/sd-helper/sd-helper
+	rm -f contrib/cmd/seccompagent/seccompagent
 	rm -rf release
 	rm -rf man/man8
 
@@ -119,7 +131,9 @@ cfmt:
 	indent -linux -l120 -il0 -ppi2 -cp1 -T size_t -T jmp_buf $(C_SRC)
 
 shellcheck:
-	shellcheck tests/integration/*.bats tests/integration/*.sh tests/*.sh script/release.sh
+	shellcheck tests/integration/*.bats tests/integration/*.sh \
+		tests/integration/*.bash tests/*.sh \
+		script/release_*.sh script/seccomp.sh script/lib.sh
 	# TODO: add shellcheck for more sh files
 
 shfmt:
@@ -136,20 +150,9 @@ verify-dependencies: vendor
 		|| (echo -e "git status:\n $$(git status -- go.mod go.sum vendor/)\nerror: vendor/, go.mod and/or go.sum not up to date. Run \"make vendor\" to update"; exit 1) \
 		&& echo "all vendor files are up to date."
 
-cross: runcimage
-	$(CONTAINER_ENGINE) run $(CONTAINER_ENGINE_RUN_FLAGS) \
-		-e BUILDTAGS="$(BUILDTAGS)" --rm \
-		-v $(CURDIR):/go/src/$(PROJECT) \
-		$(RUNC_IMAGE) make localcross
-
-localcross:
-	CGO_ENABLED=1 GOARCH=arm GOARM=6 CC=arm-linux-gnueabi-gcc   $(GO_BUILD) -o runc-armel .
-	CGO_ENABLED=1 GOARCH=arm GOARM=7 CC=arm-linux-gnueabihf-gcc $(GO_BUILD) -o runc-armhf .
-	CGO_ENABLED=1 GOARCH=arm64 CC=aarch64-linux-gnu-gcc         $(GO_BUILD) -o runc-arm64 .
-	CGO_ENABLED=1 GOARCH=ppc64le CC=powerpc64le-linux-gnu-gcc   $(GO_BUILD) -o runc-ppc64le .
-
-.PHONY: runc all recvtty static release dbuild lint man runcimage \
+.PHONY: runc all recvtty sd-helper seccompagent static releaseall release \
+	localrelease dbuild lint man runcimage \
 	test localtest unittest localunittest integration localintegration \
 	rootlessintegration localrootlessintegration shell install install-bash \
 	install-man clean cfmt shfmt shellcheck \
-	vendor verify-dependencies cross localcross
+	vendor verify-dependencies

@@ -1,5 +1,3 @@
-// +build linux
-
 package main
 
 import (
@@ -45,7 +43,7 @@ func (s *notifySocket) Close() error {
 
 // If systemd is supporting sd_notify protocol, this function will add support
 // for sd_notify protocol from within the container.
-func (s *notifySocket) setupSpec(context *cli.Context, spec *specs.Spec) error {
+func (s *notifySocket) setupSpec(spec *specs.Spec) {
 	pathInContainer := filepath.Join("/run/notify", path.Base(s.socketPath))
 	mount := specs.Mount{
 		Destination: path.Dir(pathInContainer),
@@ -54,7 +52,6 @@ func (s *notifySocket) setupSpec(context *cli.Context, spec *specs.Spec) error {
 	}
 	spec.Mounts = append(spec.Mounts, mount)
 	spec.Process.Env = append(spec.Process.Env, "NOTIFY_SOCKET="+pathInContainer)
-	return nil
 }
 
 func (s *notifySocket) bindSocket() error {
@@ -68,7 +65,7 @@ func (s *notifySocket) bindSocket() error {
 		return err
 	}
 
-	err = os.Chmod(s.socketPath, 0777)
+	err = os.Chmod(s.socketPath, 0o777)
 	if err != nil {
 		socket.Close()
 		return err
@@ -79,7 +76,7 @@ func (s *notifySocket) bindSocket() error {
 }
 
 func (s *notifySocket) setupSocketDirectory() error {
-	return os.Mkdir(path.Dir(s.socketPath), 0755)
+	return os.Mkdir(path.Dir(s.socketPath), 0o755)
 }
 
 func notifySocketStart(context *cli.Context, notifySocketHost, id string) (*notifySocket, error) {
@@ -94,12 +91,12 @@ func notifySocketStart(context *cli.Context, notifySocketHost, id string) (*noti
 	return notifySocket, nil
 }
 
-func (n *notifySocket) waitForContainer(container libcontainer.Container) error {
-	s, err := container.State()
+func (s *notifySocket) waitForContainer(container libcontainer.Container) error {
+	state, err := container.State()
 	if err != nil {
 		return err
 	}
-	return n.run(s.InitProcessPid)
+	return s.run(state.InitProcessPid)
 }
 
 func (n *notifySocket) run(pid1 int) error {

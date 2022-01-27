@@ -1,4 +1,5 @@
-// +build linux,cgo,seccomp
+//go:build cgo && seccomp
+// +build cgo,seccomp
 
 package patchbpf
 
@@ -104,14 +105,6 @@ var testArches = []string{
 	"ppc64le",
 	"s390",
 	"s390x",
-}
-
-func archStringToNative(arch string) (nativeArch, error) {
-	scmpArch, err := libseccomp.GetArchFromString(arch)
-	if err != nil {
-		return 0, fmt.Errorf("unknown architecture %q: %v", arch, err)
-	}
-	return archToNative(scmpArch)
 }
 
 func testEnosysStub(t *testing.T, defaultAction configs.Action, arches []string) {

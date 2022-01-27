@@ -1,5 +1,3 @@
-// +build linux
-
 package fs
 
 import (
@@ -10,22 +8,23 @@ import (
 )
 
 func TestFreezerSetState(t *testing.T) {
-	helper := NewCgroupTestUtil("freezer", t)
-	defer helper.cleanup()
+	path := tempDir(t, "freezer")
 
-	helper.writeFileContents(map[string]string{
+	writeFileContents(t, path, map[string]string{
 		"freezer.state": string(configs.Frozen),
 	})
 
-	helper.CgroupData.config.Resources.Freezer = configs.Thawed
+	r := &configs.Resources{
+		Freezer: configs.Thawed,
+	}
 	freezer := &FreezerGroup{}
-	if err := freezer.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	if err := freezer.Set(path, r); err != nil {
 		t.Fatal(err)
 	}
 
-	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "freezer.state")
+	value, err := fscommon.GetCgroupParamString(path, "freezer.state")
 	if err != nil {
-		t.Fatalf("Failed to parse freezer.state - %s", err)
+		t.Fatal(err)
 	}
 	if value != string(configs.Thawed) {
 		t.Fatal("Got the wrong value, set freezer.state failed.")
@@ -33,16 +32,15 @@ func TestFreezerSetState(t *testing.T) {
 }
 
 func TestFreezerSetInvalidState(t *testing.T) {
-	helper := NewCgroupTestUtil("freezer", t)
-	defer helper.cleanup()
+	path := tempDir(t, "freezer")
 
-	const (
-		invalidArg configs.FreezerState = "Invalid"
-	)
+	const invalidArg configs.FreezerState = "Invalid"
 
-	helper.CgroupData.config.Resources.Freezer = invalidArg
+	r := &configs.Resources{
+		Freezer: invalidArg,
+	}
 	freezer := &FreezerGroup{}
-	if err := freezer.Set(helper.CgroupPath, helper.CgroupData.config); err == nil {
+	if err := freezer.Set(path, r); err == nil {
 		t.Fatal("Failed to return invalid argument error")
 	}
 }

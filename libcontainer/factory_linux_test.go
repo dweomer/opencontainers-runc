@@ -1,9 +1,7 @@
-// +build linux
-
 package libcontainer
 
 import (
-	"io/ioutil"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -17,21 +15,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func newTestRoot() (string, error) {
-	dir, err := ioutil.TempDir("", "libcontainer")
-	if err != nil {
-		return "", err
-	}
-	return dir, nil
-}
-
 func TestFactoryNew(t *testing.T) {
-	root, rerr := newTestRoot()
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
-	defer os.RemoveAll(root)
-	factory, err := New(root, Cgroupfs)
+	root := t.TempDir()
+	factory, err := New(root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,12 +38,8 @@ func TestFactoryNew(t *testing.T) {
 }
 
 func TestFactoryNewIntelRdt(t *testing.T) {
-	root, rerr := newTestRoot()
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
-	defer os.RemoveAll(root)
-	factory, err := New(root, Cgroupfs, IntelRdtFs)
+	root := t.TempDir()
+	factory, err := New(root, IntelRdtFs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,12 +60,8 @@ func TestFactoryNewIntelRdt(t *testing.T) {
 }
 
 func TestFactoryNewTmpfs(t *testing.T) {
-	root, rerr := newTestRoot()
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
-	defer os.RemoveAll(root)
-	factory, err := New(root, Cgroupfs, TmpfsRoot)
+	root := t.TempDir()
+	factory, err := New(root, TmpfsRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,16 +100,14 @@ func TestFactoryNewTmpfs(t *testing.T) {
 	if m.Source != "tmpfs" {
 		t.Fatalf("Source of root: %s, expected %s", m.Source, "tmpfs")
 	}
-	unix.Unmount(root, unix.MNT_DETACH)
+	err = unix.Unmount(root, unix.MNT_DETACH)
+	if err != nil {
+		t.Error("failed to unmount root:", err)
+	}
 }
 
 func TestFactoryLoadNotExists(t *testing.T) {
-	root, rerr := newTestRoot()
-	if rerr != nil {
-		t.Fatal(rerr)
-	}
-	defer os.RemoveAll(root)
-	factory, err := New(root, Cgroupfs)
+	factory, err := New(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,21 +115,13 @@ func TestFactoryLoadNotExists(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected nil error loading non-existing container")
 	}
-	lerr, ok := err.(Error)
-	if !ok {
-		t.Fatal("expected libcontainer error type")
-	}
-	if lerr.Code() != ContainerNotExists {
-		t.Fatalf("expected error code %s but received %s", ContainerNotExists, lerr.Code())
+	if !errors.Is(err, ErrNotExist) {
+		t.Fatalf("expected ErrNotExist, got %v", err)
 	}
 }
 
 func TestFactoryLoadContainer(t *testing.T) {
-	root, err := newTestRoot()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(root)
+	root := t.TempDir()
 	// setup default container config and state for mocking
 	var (
 		id            = "1"
@@ -172,6 +140,9 @@ func TestFactoryLoadContainer(t *testing.T) {
 		expectedConfig = &configs.Config{
 			Rootfs: "/mycontainer/root",
 			Hooks:  expectedHooks,
+			Cgroups: &configs.Cgroup{
+				Resources: &configs.Resources{},
+			},
 		}
 		expectedState = &State{
 			BaseState: BaseState{
@@ -186,7 +157,7 @@ func TestFactoryLoadContainer(t *testing.T) {
 	if err := marshal(filepath.Join(root, id, stateFilename), expectedState); err != nil {
 		t.Fatal(err)
 	}
-	factory, err := New(root, Cgroupfs, IntelRdtFs)
+	factory, err := New(root, IntelRdtFs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -219,7 +190,7 @@ func marshal(path string, v interface{}) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer f.Close() //nolint: errcheck
 	return utils.WriteJSON(f, v)
 }
 

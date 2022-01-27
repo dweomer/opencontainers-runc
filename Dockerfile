@@ -1,11 +1,14 @@
-ARG GO_VERSION=1.15
-ARG BATS_VERSION=v1.2.1
+ARG GO_VERSION=1.17
+ARG BATS_VERSION=v1.3.0
+ARG LIBSECCOMP_VERSION=2.5.3
 
-FROM golang:${GO_VERSION}-buster
+FROM golang:${GO_VERSION}-bullseye
 ARG DEBIAN_FRONTEND=noninteractive
+ARG CRIU_REPO=https://download.opensuse.org/repositories/devel:/tools:/criu/Debian_11
 
-RUN echo 'deb https://download.opensuse.org/repositories/devel:/tools:/criu/Debian_10/ /' > /etc/apt/sources.list.d/criu.list \
-    && wget -nv https://download.opensuse.org/repositories/devel:/tools:/criu/Debian_10/Release.key -O- | apt-key add - \
+RUN KEYFILE=/usr/share/keyrings/criu-repo-keyring.gpg; \
+    wget -nv $CRIU_REPO/Release.key -O- | gpg --dearmor > "$KEYFILE" \
+    && echo "deb [signed-by=$KEYFILE] $CRIU_REPO/ /" > /etc/apt/sources.list.d/criu.list \
     && dpkg --add-architecture armel \
     && dpkg --add-architecture armhf \
     && dpkg --add-architecture arm64 \
@@ -18,20 +21,17 @@ RUN echo 'deb https://download.opensuse.org/repositories/devel:/tools:/criu/Debi
         crossbuild-essential-armel \
         crossbuild-essential-armhf \
         crossbuild-essential-ppc64el \
+        crossbuild-essential-s390x \
         curl \
         gawk \
         gcc \
+        gperf \
         iptables \
         jq \
         kmod \
-        libseccomp-dev \
-        libseccomp-dev:arm64 \
-        libseccomp-dev:armel \
-        libseccomp-dev:armhf \
-        libseccomp-dev:ppc64el \
-        libseccomp2 \
         pkg-config \
-        python-minimal \
+        python3-minimal \
+        sshfs \
         sudo \
         uidmap \
     && apt-get clean \
@@ -51,5 +51,14 @@ RUN cd /tmp \
     && git reset --hard "${BATS_VERSION}" \
     && ./install.sh /usr/local \
     && rm -rf /tmp/bats-core
+
+# install libseccomp
+ARG LIBSECCOMP_VERSION
+COPY script/* /tmp/script/
+RUN mkdir -p /opt/libseccomp \
+    && /tmp/script/seccomp.sh "$LIBSECCOMP_VERSION" /opt/libseccomp arm64 armel armhf ppc64le s390x
+ENV LIBSECCOMP_VERSION=$LIBSECCOMP_VERSION
+ENV LD_LIBRARY_PATH=/opt/libseccomp/lib
+ENV PKG_CONFIG_PATH=/opt/libseccomp/lib/pkgconfig
 
 WORKDIR /go/src/github.com/opencontainers/runc

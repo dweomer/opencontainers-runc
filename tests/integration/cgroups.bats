@@ -16,23 +16,17 @@ function setup() {
 }
 
 @test "runc create (rootless + no limits + cgrouppath + no permission) fails with permission error" {
-	requires rootless
-	requires rootless_no_cgroup
-	# systemd controls the permission, so error does not happen
-	requires no_systemd
+	requires rootless rootless_no_cgroup
 
 	set_cgroups_path
 
 	runc run -d --console-socket "$CONSOLE_SOCKET" test_cgroups_permissions
 	[ "$status" -eq 1 ]
-	[[ "$output" == *"applying cgroup configuration"*"permission denied"* ]]
+	[[ "$output" == *"unable to apply cgroup configuration"*"permission denied"* ]]
 }
 
 @test "runc create (rootless + limits + no cgrouppath + no permission) fails with informative error" {
-	requires rootless
-	requires rootless_no_cgroup
-	# systemd controls the permission, so error does not happen
-	requires no_systemd
+	requires rootless rootless_no_cgroup
 
 	set_resources_limit
 
@@ -55,8 +49,8 @@ function setup() {
 			if [ "$(id -u)" = "0" ]; then
 				check_cgroup_value "cgroup.controllers" "$(cat /sys/fs/cgroup/machine.slice/cgroup.controllers)"
 			else
-				# shellcheck disable=SC2046
-				check_cgroup_value "cgroup.controllers" "$(cat /sys/fs/cgroup/user.slice/user-$(id -u).slice/cgroup.controllers)"
+				# Filter out hugetlb and misc as systemd is unable to delegate them.
+				check_cgroup_value "cgroup.controllers" "$(sed -e 's/ hugetlb//' -e 's/ misc//' </sys/fs/cgroup/user.slice/user-"$(id -u)".slice/cgroup.controllers)"
 			fi
 		else
 			check_cgroup_value "cgroup.controllers" "$(cat /sys/fs/cgroup/cgroup.controllers)"
@@ -156,6 +150,43 @@ function setup() {
 	fi
 }
 
+@test "runc run (per-device io weight for bfq)" {
+	requires root # to create a loop device
+
+	dd if=/dev/zero of=backing.img bs=4096 count=1
+	dev=$(losetup --find --show backing.img) || skip "unable to create a loop device"
+
+	# See if BFQ scheduler is available.
+	if ! { grep -qw bfq "/sys/block/${dev#/dev/}/queue/scheduler" &&
+		echo bfq >"/sys/block/${dev#/dev/}/queue/scheduler"; }; then
+		losetup -d "$dev"
+		skip "BFQ scheduler not available"
+	fi
+
+	set_cgroups_path
+
+	IFS=$' \t:' read -r major minor <<<"$(lsblk -nd -o MAJ:MIN "$dev")"
+	update_config '	  .linux.devices += [{path: "'"$dev"'", type: "b", major: '"$major"', minor: '"$minor"'}]
+			| .linux.resources.blockIO.weight |= 333
+			| .linux.resources.blockIO.weightDevice |= [
+				{ major: '"$major"', minor: '"$minor"', weight: 444 }
+			]'
+	runc run -d --console-socket "$CONSOLE_SOCKET" test_dev_weight
+	[ "$status" -eq 0 ]
+
+	# The loop device itself is no longer needed.
+	losetup -d "$dev"
+
+	if [ "$CGROUP_UNIFIED" = "yes" ]; then
+		file="io.bfq.weight"
+	else
+		file="blkio.bfq.weight_device"
+	fi
+	weights=$(get_cgroup_value $file)
+	[[ "$weights" == *"default 333"* ]]
+	[[ "$weights" == *"$major:$minor 444"* ]]
+}
+
 @test "runc run (cgroup v2 resources.unified only)" {
 	requires root cgroups_v2
 
@@ -250,4 +281,131 @@ function setup() {
 	runc exec test_cgroups_unified find /sys/fs/cgroup/ -type d
 	[ "$status" -eq 0 ]
 	[ "$(wc -l <<<"$output")" -eq 1 ]
+}
+
+@test "runc exec (cgroup v1+hybrid joins correct cgroup)" {
+	requires root cgroups_hybrid
+
+	set_cgroups_path
+
+	runc run --pid-file pid.txt -d --console-socket "$CONSOLE_SOCKET" test_cgroups_group
+	[ "$status" -eq 0 ]
+
+	pid=$(cat pid.txt)
+	run_cgroup=$(tail -1 </proc/"$pid"/cgroup)
+	[[ "$run_cgroup" == *"runc-cgroups-integration-test"* ]]
+
+	runc exec test_cgroups_group cat /proc/self/cgroup
+	[ "$status" -eq 0 ]
+	exec_cgroup=${lines[-1]}
+	[[ $exec_cgroup == *"runc-cgroups-integration-test"* ]]
+
+	# check that the cgroups v2 path is the same for both processes
+	[[ "$run_cgroup" == "$exec_cgroup" ]]
+}
+
+@test "runc exec should refuse a paused container" {
+	if [[ "$ROOTLESS" -ne 0 ]]; then
+		requires rootless_cgroup
+	fi
+	requires cgroups_freezer
+
+	set_cgroups_path
+
+	runc run -d --console-socket "$CONSOLE_SOCKET" ct1
+	[ "$status" -eq 0 ]
+	runc pause ct1
+	[ "$status" -eq 0 ]
+
+	# Exec should not timeout or succeed.
+	runc exec ct1 echo ok
+	[ "$status" -eq 255 ]
+	[[ "$output" == *"cannot exec in a paused container"* ]]
+}
+
+@test "runc exec --ignore-paused" {
+	if [[ "$ROOTLESS" -ne 0 ]]; then
+		requires rootless_cgroup
+	fi
+	requires cgroups_freezer
+
+	set_cgroups_path
+
+	runc run -d --console-socket "$CONSOLE_SOCKET" ct1
+	[ "$status" -eq 0 ]
+	runc pause ct1
+	[ "$status" -eq 0 ]
+
+	# Resume the container a bit later.
+	(
+		sleep 2
+		runc resume ct1
+	) &
+
+	# Exec should not timeout or succeed.
+	runc exec --ignore-paused ct1 echo ok
+	[ "$status" -eq 0 ]
+	[ "$output" = "ok" ]
+}
+
+@test "runc run/create should warn about a non-empty cgroup" {
+	if [[ "$ROOTLESS" -ne 0 ]]; then
+		requires rootless_cgroup
+	fi
+
+	set_cgroups_path
+
+	runc run -d --console-socket "$CONSOLE_SOCKET" ct1
+	[ "$status" -eq 0 ]
+
+	# Run a second container sharing the cgroup with the first one.
+	runc --debug run -d --console-socket "$CONSOLE_SOCKET" ct2
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"container's cgroup is not empty"* ]]
+
+	# Same but using runc create.
+	runc create --console-socket "$CONSOLE_SOCKET" ct3
+	[ "$status" -eq 0 ]
+	[[ "$output" == *"container's cgroup is not empty"* ]]
+}
+
+@test "runc run/create should refuse pre-existing frozen cgroup" {
+	requires cgroups_freezer
+	if [[ "$ROOTLESS" -ne 0 ]]; then
+		requires rootless_cgroup
+	fi
+
+	set_cgroups_path
+
+	case $CGROUP_UNIFIED in
+	no)
+		FREEZER_DIR="${CGROUP_FREEZER_BASE_PATH}/${REL_CGROUPS_PATH}"
+		FREEZER="${FREEZER_DIR}/freezer.state"
+		STATE="FROZEN"
+		;;
+	yes)
+		FREEZER_DIR="${CGROUP_PATH}"
+		FREEZER="${FREEZER_DIR}/cgroup.freeze"
+		STATE="1"
+		;;
+	esac
+
+	# Create and freeze the cgroup.
+	mkdir -p "$FREEZER_DIR"
+	echo "$STATE" >"$FREEZER"
+
+	# Start a container.
+	runc run -d --console-socket "$CONSOLE_SOCKET" ct1
+	[ "$status" -eq 1 ]
+	# A warning should be printed.
+	[[ "$output" == *"container's cgroup unexpectedly frozen"* ]]
+
+	# Same check for runc create.
+	runc create --console-socket "$CONSOLE_SOCKET" ct2
+	[ "$status" -eq 1 ]
+	# A warning should be printed.
+	[[ "$output" == *"container's cgroup unexpectedly frozen"* ]]
+
+	# Cleanup.
+	rmdir "$FREEZER_DIR"
 }

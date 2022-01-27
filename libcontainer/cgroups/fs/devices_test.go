@@ -1,51 +1,51 @@
-// +build linux
-
 package fs
 
 import (
 	"testing"
 
 	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
+	"github.com/opencontainers/runc/libcontainer/configs"
 	"github.com/opencontainers/runc/libcontainer/devices"
 )
 
 func TestDevicesSetAllow(t *testing.T) {
-	helper := NewCgroupTestUtil("devices", t)
-	defer helper.cleanup()
+	path := tempDir(t, "devices")
 
-	helper.writeFileContents(map[string]string{
+	writeFileContents(t, path, map[string]string{
 		"devices.allow": "",
 		"devices.deny":  "",
 		"devices.list":  "a *:* rwm",
 	})
 
-	helper.CgroupData.config.Resources.Devices = []*devices.Rule{
-		{
-			Type:        devices.CharDevice,
-			Major:       1,
-			Minor:       5,
-			Permissions: devices.Permissions("rwm"),
-			Allow:       true,
+	r := &configs.Resources{
+		Devices: []*devices.Rule{
+			{
+				Type:        devices.CharDevice,
+				Major:       1,
+				Minor:       5,
+				Permissions: devices.Permissions("rwm"),
+				Allow:       true,
+			},
 		},
 	}
 
-	d := &DevicesGroup{testingSkipFinalCheck: true}
-	if err := d.Set(helper.CgroupPath, helper.CgroupData.config); err != nil {
+	d := &DevicesGroup{TestingSkipFinalCheck: true}
+	if err := d.Set(path, r); err != nil {
 		t.Fatal(err)
 	}
 
 	// The default deny rule must be written.
-	value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "devices.deny")
+	value, err := fscommon.GetCgroupParamString(path, "devices.deny")
 	if err != nil {
-		t.Fatalf("Failed to parse devices.deny: %s", err)
+		t.Fatal(err)
 	}
 	if value[0] != 'a' {
 		t.Errorf("Got the wrong value (%q), set devices.deny failed.", value)
 	}
 
 	// Permitted rule must be written.
-	if value, err := fscommon.GetCgroupParamString(helper.CgroupPath, "devices.allow"); err != nil {
-		t.Fatalf("Failed to parse devices.allow: %s", err)
+	if value, err := fscommon.GetCgroupParamString(path, "devices.allow"); err != nil {
+		t.Fatal(err)
 	} else if value != "c 1:5 rwm" {
 		t.Errorf("Got the wrong value (%q), set devices.allow failed.", value)
 	}

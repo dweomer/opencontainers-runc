@@ -33,15 +33,31 @@ function teardown() {
 	[[ "${lines[0]}" =~ "crw-rw-rw".+"1".+"0".+"0".+"5,".+"2".+"/dev/ptmx" ]]
 }
 
-@test "runc run [device cgroup deny]" {
+@test "runc run/update [device cgroup deny]" {
 	requires root
 
 	update_config ' .linux.resources.devices = [{"allow": false, "access": "rwm"}]
 			| .linux.devices = [{"path": "/dev/kmsg", "type": "c", "major": 1, "minor": 11}]
+			| .process.capabilities.bounding += ["CAP_SYSLOG"]
+			| .process.capabilities.effective += ["CAP_SYSLOG"]
+			| .process.capabilities.inheritable += ["CAP_SYSLOG"]
+			| .process.capabilities.permitted += ["CAP_SYSLOG"]
 			| .process.args |= ["sh"]'
 
 	runc run -d --console-socket "$CONSOLE_SOCKET" test_deny
 	[ "$status" -eq 0 ]
+
+	# test write
+	runc exec test_deny sh -c 'hostname | tee /dev/kmsg'
+	[ "$status" -eq 1 ]
+	[[ "${output}" == *'Operation not permitted'* ]]
+
+	# test read
+	runc exec test_deny sh -c 'head -n 1 /dev/kmsg'
+	[ "$status" -eq 1 ]
+	[[ "${output}" == *'Operation not permitted'* ]]
+
+	runc update test_deny --pids-limit 42
 
 	# test write
 	runc exec test_deny sh -c 'hostname | tee /dev/kmsg'
@@ -60,6 +76,10 @@ function teardown() {
 	update_config ' .linux.resources.devices = [{"allow": false, "access": "rwm"},{"allow": true, "type": "c", "major": 1, "minor": 11, "access": "rw"}]
 			| .linux.devices = [{"path": "/dev/kmsg", "type": "c", "major": 1, "minor": 11}]
 			| .process.args |= ["sh"]
+			| .process.capabilities.bounding += ["CAP_SYSLOG"]
+			| .process.capabilities.effective += ["CAP_SYSLOG"]
+			| .process.capabilities.inheritable += ["CAP_SYSLOG"]
+			| .process.capabilities.permitted += ["CAP_SYSLOG"]
 			| .hostname = "myhostname"'
 
 	runc run -d --console-socket "$CONSOLE_SOCKET" test_allow_char
@@ -84,10 +104,10 @@ function teardown() {
 @test "runc run [device cgroup allow rm block device]" {
 	requires root
 
-	# get first block device
-	device="/dev/$(lsblk -nd -o NAME | head -n 1)"
-	major="$(lsblk -nd -o MAJ:MIN | head -n 1 | awk -F":" '{print $1}' | sed "s/\s*//g")"
-	minor="$(lsblk -nd -o MAJ:MIN | head -n 1 | awk -F":" '{print $2}')"
+	# Get the first block device.
+	IFS=$' \t:' read -r device major minor <<<"$(lsblk -nd -o NAME,MAJ:MIN)"
+	# Could have used -o PATH but lsblk from CentOS 7 does not have it.
+	device="/dev/$device"
 
 	update_config ' .linux.resources.devices = [{"allow": false, "access": "rwm"},{"allow": true, "type": "b", "major": '"$major"', "minor": '"$minor"', "access": "rwm"}]
 			| .linux.devices = [{"path": "'"$device"'", "type": "b", "major": '"$major"', "minor": '"$minor"'}]

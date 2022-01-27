@@ -8,13 +8,9 @@
 
 ## Introduction
 
-`runc` is a CLI tool for spawning and running containers according to the OCI specification.
+`runc` is a CLI tool for spawning and running containers on Linux according to the OCI specification.
 
 ## Releases
-
-`runc` depends on and tracks the [runtime-spec](https://github.com/opencontainers/runtime-spec) repository.
-We will try to make sure that `runc` and the OCI specification major versions stay in lockstep.
-This means that `runc` 1.0.0 should implement the 1.0 version of the specification.
 
 You can find official releases of `runc` on the [release](https://github.com/opencontainers/runc/releases) page.
 
@@ -27,8 +23,7 @@ A third party security audit was performed by Cure53, you can see the full repor
 
 ## Building
 
-`runc` currently supports the Linux platform with various architecture support.
-It must be built with Go version 1.14 or higher.
+`runc` only supports Linux. It must be built with Go version 1.16 or higher.
 
 In order to enable seccomp support you will need to install `libseccomp` on your platform.
 > e.g. `libseccomp-devel` for CentOS, or `libseccomp-dev` for Ubuntu
@@ -115,7 +110,7 @@ You can run a test using your container engine's flags by setting `CONTAINER_ENG
 
 `runc` uses [Go Modules](https://github.com/golang/go/wiki/Modules) for dependencies management.
 Please refer to [Go Modules](https://github.com/golang/go/wiki/Modules) for how to add or update
-new dependencies. When updating dependencies, be sure that you are running Go `1.14` or newer.
+new dependencies.
 
 ```
 # Update vendored dependencies
@@ -306,6 +301,7 @@ WantedBy=multi-user.target
 * [Checkpoint and restore](./docs/checkpoint-restore.md)
 * [systemd cgroup driver](./docs/systemd.md)
 * [Terminals and standard IO](./docs/terminals.md)
+* [Experimental features](./docs/experimental.md)
 
 ## License
 

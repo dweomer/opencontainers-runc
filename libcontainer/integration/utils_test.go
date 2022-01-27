@@ -2,15 +2,13 @@ package integration
 
 import (
 	"bytes"
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -36,7 +34,7 @@ func init() {
 	// Call it to make sure images are downloaded, and to get the paths.
 	out, err := exec.Command(getImages).CombinedOutput()
 	if err != nil {
-		panic(fmt.Errorf("getImages error %s (output: %s)", err, out))
+		panic(fmt.Errorf("getImages error %w (output: %s)", err, out))
 	}
 	// Extract the value of BUSYBOX_IMAGE.
 	found := regexp.MustCompile(`(?m)^BUSYBOX_IMAGE=(.*)$`).FindSubmatchIndex(out)
@@ -81,65 +79,80 @@ func (b *stdBuffers) String() string {
 
 // ok fails the test if an err is not nil.
 func ok(t testing.TB, err error) {
+	t.Helper()
 	if err != nil {
-		_, file, line, _ := runtime.Caller(1)
-		t.Fatalf("%s:%d: unexpected error: %s\n\n", filepath.Base(file), line, err.Error())
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func waitProcess(p *libcontainer.Process, t *testing.T) {
-	_, file, line, _ := runtime.Caller(1)
+	t.Helper()
 	status, err := p.Wait()
-
 	if err != nil {
-		t.Fatalf("%s:%d: unexpected error: %s\n\n", filepath.Base(file), line, err.Error())
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if !status.Success() {
-		t.Fatalf("%s:%d: unexpected status: %s\n\n", filepath.Base(file), line, status.String())
+		t.Fatalf("unexpected status: %v", status)
 	}
 }
 
-func newTestRoot() (string, error) {
-	dir, err := ioutil.TempDir("", "libcontainer")
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", err
-	}
-	testRoots = append(testRoots, dir)
-	return dir, nil
-}
-
-func newTestBundle() (string, error) {
-	dir, err := ioutil.TempDir("", "bundle")
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", err
-	}
-	return dir, nil
-}
-
-// newRootfs creates a new tmp directory and copies the busybox root filesystem
-func newRootfs() (string, error) {
-	dir, err := ioutil.TempDir("", "")
-	if err != nil {
-		return "", err
-	}
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", err
-	}
+// newRootfs creates a new tmp directory and copies the busybox root
+// filesystem to it.
+func newRootfs(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
 	if err := copyBusybox(dir); err != nil {
-		return "", err
+		t.Fatal(err)
 	}
-	return dir, nil
+
+	// Make sure others can read+exec, so all tests (inside userns too) can
+	// read the rootfs.
+	if err := traversePath(dir); err != nil {
+		t.Fatalf("Error making newRootfs path traversable by others: %v", err)
+	}
+
+	return dir
+}
+
+// traversePath gives read+execute permissions to others for all elements in tPath below
+// os.TempDir() and errors out if elements above it don't have read+exec permissions for others.
+// tPath MUST be a descendant of os.TempDir(). The path returned by testing.TempDir() usually is.
+func traversePath(tPath string) error {
+	// Check the assumption that the argument is under os.TempDir().
+	tempBase := os.TempDir()
+	if !strings.HasPrefix(tPath, tempBase) {
+		return fmt.Errorf("traversePath: %q is not a descendant of %q", tPath, tempBase)
+	}
+
+	var path string
+	for _, p := range strings.SplitAfter(tPath, "/") {
+		path = path + p
+		stats, err := os.Stat(path)
+		if err != nil {
+			return err
+		}
+
+		perm := stats.Mode().Perm()
+
+		if perm&0o5 == 0o5 {
+			continue
+		}
+
+		if strings.HasPrefix(tempBase, path) {
+			return fmt.Errorf("traversePath: directory %q MUST have read+exec permissions for others", path)
+		}
+
+		if err := os.Chmod(path, perm|0o5); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 func remove(dir string) {
-	os.RemoveAll(dir)
+	_ = os.RemoveAll(dir)
 }
 
 // copyBusybox copies the rootfs for a busybox container created for the test image
@@ -147,32 +160,18 @@ func remove(dir string) {
 func copyBusybox(dest string) error {
 	out, err := exec.Command("sh", "-c", fmt.Sprintf("tar --exclude './dev/*' -C %q -xf %q", dest, busyboxTar)).CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("untar error %q: %q", err, out)
+		return fmt.Errorf("untar error %w: %q", err, out)
 	}
 	return nil
 }
 
-func newContainer(config *configs.Config) (libcontainer.Container, error) {
-	h := md5.New()
-	h.Write([]byte(time.Now().String()))
-	return newContainerWithName(hex.EncodeToString(h.Sum(nil)), config)
-}
+func newContainer(t *testing.T, config *configs.Config) (libcontainer.Container, error) {
+	name := strings.ReplaceAll(t.Name(), "/", "_") + strconv.FormatInt(-int64(time.Now().Nanosecond()), 35)
+	root := t.TempDir()
 
-func newContainerWithName(name string, config *configs.Config) (libcontainer.Container, error) {
-	root, err := newTestRoot()
+	f, err := libcontainer.New(root)
 	if err != nil {
 		return nil, err
-	}
-
-	f, err := libcontainer.New(root, libcontainer.Cgroupfs)
-	if err != nil {
-		return nil, err
-	}
-	if config.Cgroups != nil && config.Cgroups.Parent == "system.slice" {
-		f, err = libcontainer.New(root, libcontainer.SystemdCgroups)
-		if err != nil {
-			return nil, err
-		}
 	}
 	return f.Create(name, config)
 }
@@ -181,12 +180,12 @@ func newContainerWithName(name string, config *configs.Config) (libcontainer.Con
 //
 // buffers are returned containing the STDOUT and STDERR output for the run
 // along with the exit code and any go error
-func runContainer(config *configs.Config, console string, args ...string) (buffers *stdBuffers, exitCode int, err error) {
-	container, err := newContainer(config)
+func runContainer(t *testing.T, config *configs.Config, args ...string) (buffers *stdBuffers, exitCode int, err error) {
+	container, err := newContainer(t, config)
 	if err != nil {
 		return nil, -1, err
 	}
-	defer container.Destroy()
+	defer destroyContainer(container)
 	buffers = newStdBuffers()
 	process := &libcontainer.Process{
 		Cwd:    "/",
@@ -215,4 +214,8 @@ func runContainer(config *configs.Config, console string, args ...string) (buffe
 		return buffers, -1, err
 	}
 	return
+}
+
+func destroyContainer(container libcontainer.Container) {
+	_ = container.Destroy()
 }

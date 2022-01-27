@@ -1,20 +1,18 @@
 package systemd
 
 import (
-	"encoding/binary"
+	"errors"
+	"math/big"
 	"strconv"
 	"strings"
-
-	"github.com/pkg/errors"
-	"github.com/willf/bitset"
 )
 
-// rangeToBits converts a text representation of a CPU mask (as written to
+// RangeToBits converts a text representation of a CPU mask (as written to
 // or read from cgroups' cpuset.* files, e.g. "1,3-5") to a slice of bytes
 // with the corresponding bits set (as consumed by systemd over dbus as
 // AllowedCPUs/AllowedMemoryNodes unit property value).
-func rangeToBits(str string) ([]byte, error) {
-	bits := &bitset.BitSet{}
+func RangeToBits(str string) ([]byte, error) {
+	bits := new(big.Int)
 
 	for _, r := range strings.Split(str, ",") {
 		// allow extra spaces around
@@ -36,32 +34,22 @@ func rangeToBits(str string) ([]byte, error) {
 			if start > end {
 				return nil, errors.New("invalid range: " + r)
 			}
-			for i := uint(start); i <= uint(end); i++ {
-				bits.Set(i)
+			for i := start; i <= end; i++ {
+				bits.SetBit(bits, int(i), 1)
 			}
 		} else {
 			val, err := strconv.ParseUint(ranges[0], 10, 32)
 			if err != nil {
 				return nil, err
 			}
-			bits.Set(uint(val))
+			bits.SetBit(bits, int(val), 1)
 		}
 	}
 
-	val := bits.Bytes()
-	if len(val) == 0 {
+	ret := bits.Bytes()
+	if len(ret) == 0 {
 		// do not allow empty values
 		return nil, errors.New("empty value")
 	}
-	ret := make([]byte, len(val)*8)
-	for i := range val {
-		// bitset uses BigEndian internally
-		binary.BigEndian.PutUint64(ret[i*8:], val[len(val)-1-i])
-	}
-	// remove upper all-zero bytes
-	for ret[0] == 0 {
-		ret = ret[1:]
-	}
-
 	return ret, nil
 }

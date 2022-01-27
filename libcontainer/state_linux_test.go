@@ -1,8 +1,7 @@
-// +build linux
-
 package libcontainer
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -24,11 +23,6 @@ func TestStateStatus(t *testing.T) {
 	}
 }
 
-func isStateTransitionError(err error) bool {
-	_, ok := err.(*stateTransitionError)
-	return ok
-}
-
 func testTransitions(t *testing.T, initialState containerState, valid []containerState) {
 	validMap := map[reflect.Type]interface{}{}
 	for _, validState := range valid {
@@ -48,7 +42,8 @@ func testTransitions(t *testing.T, initialState containerState, valid []containe
 			if err == nil {
 				t.Fatal("transition should fail")
 			}
-			if !isStateTransitionError(err) {
+			var stErr *stateTransitionError
+			if !errors.As(err, &stErr) {
 				t.Fatal("expected stateTransitionError")
 			}
 		})

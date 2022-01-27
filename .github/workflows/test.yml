@@ -1,8 +1,5 @@
 # NOTE Github Actions execution environments lack a terminal, needed for
-# some integration tests. Two ways to get a terminal are used below:
-#
-# 1. script utility -- for "local" integration tests;
-# 2. ssh -tt -- for Vagrant VMs (script is buggy on CentOS 7).
+# some integration tests. So we use `script` command to fake a terminal.
 
 name: ci
 on:
@@ -11,7 +8,12 @@ on:
       - v*
     branches:
       - master
+      - release-*
   pull_request:
+
+env:
+  # Don't ignore C warnings. Note that the output of "go env CGO_CFLAGS" by default is "-g -O2", so we keep them.
+  CGO_CFLAGS: -g -O2 -Werror
 
 jobs:
   test:
@@ -19,9 +21,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go-version: [1.14.x, 1.15.x, 1.16.x]
+        go-version: [1.16.x, 1.17.x, 1.18.0-beta1]
         rootless: ["rootless", ""]
         race: ["-race", ""]
+        criu: [""]
+        include:
+          # Also test against latest criu-dev
+          - go-version: 1.17.x
+            rootless: ""
+            race: ""
+            criu: "criu-dev"
 
     steps:
 
@@ -29,11 +38,26 @@ jobs:
       uses: actions/checkout@v2
 
     - name: install deps
+      if: matrix.criu == ''
+      env:
+        REPO: https://download.opensuse.org/repositories/devel:/tools:/criu/xUbuntu_20.04
       run: |
         # criu repo
-        sudo add-apt-repository -y ppa:criu/ppa
-        # apt-add-repository runs apt update so we don't have to
-        sudo apt -q install libseccomp-dev criu
+        curl -fSsl $REPO/Release.key | sudo apt-key add -
+        echo "deb $REPO/ /" | sudo tee /etc/apt/sources.list.d/criu.list
+        sudo apt update
+        sudo apt install libseccomp-dev criu sshfs
+
+    - name: install deps (criu ${{ matrix.criu }})
+      if: matrix.criu != ''
+      run: |
+        sudo apt -q update
+        sudo apt -q install libseccomp-dev sshfs \
+          libcap-dev libnet1-dev libnl-3-dev \
+          libprotobuf-c-dev libprotobuf-dev protobuf-c-compiler protobuf-compiler
+        git clone https://github.com/checkpoint-restore/criu.git ~/criu
+        (cd ~/criu && git checkout ${{ matrix.criu }} && sudo make install-criu)
+        rm -rf ~/criu
 
     - name: install go ${{ matrix.go-version }}
       uses: actions/setup-go@v2
@@ -47,7 +71,7 @@ jobs:
     - name: install bats
       uses: mig4/setup-bats@v1
       with:
-        bats-version: 1.2.1
+        bats-version: 1.3.0
 
     - name: unit test
       if: matrix.rootless != 'rootless'
@@ -57,9 +81,10 @@ jobs:
       if: matrix.rootless == 'rootless'
       run: |
         sudo useradd -u2000 -m -d/home/rootless -s/bin/bash rootless
-        # Allow root to execute `ssh rootless@localhost` in tests/rootless.sh
+        # Allow root and rootless itself to execute `ssh rootless@localhost` in tests/rootless.sh
         ssh-keygen -t ecdsa -N "" -f $HOME/rootless.key
         sudo mkdir -m 0700 -p /home/rootless/.ssh
+        sudo cp $HOME/rootless.key /home/rootless/.ssh/id_ecdsa
         sudo cp $HOME/rootless.key.pub /home/rootless/.ssh/authorized_keys
         sudo chown -R rootless.rootless /home/rootless
 
@@ -70,88 +95,6 @@ jobs:
       # can't use systemd driver with cgroupv1
       if: matrix.rootless != 'rootless'
       run: sudo -E PATH="$PATH" script -e -c 'make RUNC_USE_SYSTEMD=yes local${{ matrix.rootless }}integration'
-
-
-  # cgroup v2 unified hierarchy + very recent kernel (openat2)
-  fedora:
-    # nested virtualization is only available on macOS hosts
-    runs-on: macos-10.15
-    timeout-minutes: 30
-    # only run it if others have passed
-    needs: [test]
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: "Cache ~/.vagrant.d/boxes, using hash of Vagrantfile.fedora33"
-        uses: actions/cache@v2
-        with:
-          path: ~/.vagrant.d/boxes
-          key: vagrant-${{ hashFiles('Vagrantfile.fedora33') }}
-
-      - name: prepare vagrant
-        run: |
-          ln -sf Vagrantfile.fedora33 Vagrantfile
-          # Retry if it fails (download.fedoraproject.org returns 404 sometimes)
-          vagrant up || vagrant up
-          vagrant ssh-config >> ~/.ssh/config
-
-      - name: system info
-        run: ssh default 'sh -exc "uname -a && systemctl --version && df -T"'
-
-      - name: unit tests
-        run: ssh default 'cd /vagrant && sudo make localunittest'
-
-      - name: cgroupv2 with systemd
-        run: ssh -tt default "sudo make -C /vagrant localintegration RUNC_USE_SYSTEMD=yes"
-
-      - name: cgroupv2 with fs2
-        run: ssh -tt default "sudo make -C /vagrant localintegration"
-
-      - name: cgroupv2 with systemd (rootless)
-        run: ssh -tt default "sudo make -C /vagrant localrootlessintegration RUNC_USE_SYSTEMD=yes"
-
-      - name: cgroupv2 with fs2 (rootless)
-        run: ssh -tt default "sudo make -C /vagrant localrootlessintegration"
-
-
-  # kernel 3.10 (frankenized), systemd 219
-  centos7:
-    # nested virtualization is only available on macOS hosts
-    runs-on: macos-10.15
-    timeout-minutes: 15
-    # only run it if others have passed
-    needs: [test]
-    steps:
-      - uses: actions/checkout@v2
-
-      - name: "Cache ~/.vagrant.d/boxes, using hash of Vagrantfile.centos7"
-        uses: actions/cache@v2
-        with:
-          path: ~/.vagrant.d/boxes
-          key: vagrant-${{ hashFiles('Vagrantfile.centos7') }}
-
-      - name: prepare vagrant
-        run: |
-          ln -sf Vagrantfile.centos7 Vagrantfile
-          vagrant up
-          vagrant ssh-config >> ~/.ssh/config
-
-      - name: system info
-        run: ssh default 'rpm -q centos-release kernel systemd'
-
-      - name: unit tests
-        run: ssh default 'sudo -i make -C /vagrant localunittest'
-
-      - name: integration tests (fs cgroup driver)
-        run: ssh -tt default "sudo -i make -C /vagrant localintegration"
-
-      - name: integration tests (systemd cgroup driver)
-        run: ssh -tt default "sudo -i make -C /vagrant localintegration RUNC_USE_SYSTEMD=1"
-
-      - name: rootless integration
-      # FIXME: rootless is skipped because of EPERM on writing cgroup.procs
-        if: false
-        run: ssh default "sudo -i make -C /vagrant localrootlessintegration"
 
   # We need to continue support for 32-bit ARM.
   # However, we do not have 32-bit ARM CI, so we use i386 for testing 32bit stuff.
@@ -177,7 +120,9 @@ jobs:
         sudo apt -q install libseccomp-dev libseccomp-dev:i386 gcc-multilib criu
 
     - name: install go
-      uses: actions/setup-go@v2 # use default Go version
+      uses: actions/setup-go@v2
+      with:
+        go-version: 1.x # Latest stable
 
     - name: unit test
       # cgo is disabled by default when cross-compiling

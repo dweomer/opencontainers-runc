@@ -1,5 +1,3 @@
-// +build linux
-
 /*
 Utility for testing cgroup operations.
 
@@ -8,65 +6,34 @@ Creates a mock of the cgroup filesystem for the duration of the test.
 package fs
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/opencontainers/runc/libcontainer/cgroups/fscommon"
-	"github.com/opencontainers/runc/libcontainer/configs"
+	"github.com/opencontainers/runc/libcontainer/cgroups"
 )
 
 func init() {
-	fscommon.TestMode = true
+	cgroups.TestMode = true
 }
 
-type cgroupTestUtil struct {
-	// cgroup data to use in tests.
-	CgroupData *cgroupData
-
-	// Path to the mock cgroup directory.
-	CgroupPath string
-
-	// Temporary directory to store mock cgroup filesystem.
-	tempDir string
-	t       *testing.T
-}
-
-// Creates a new test util for the specified subsystem
-func NewCgroupTestUtil(subsystem string, t *testing.T) *cgroupTestUtil {
-	d := &cgroupData{
-		config: &configs.Cgroup{},
-	}
-	d.config.Resources = &configs.Resources{}
-	tempDir, err := ioutil.TempDir("", "cgroup_test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	d.root = tempDir
-	testCgroupPath := filepath.Join(d.root, subsystem)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+// tempDir creates a new test directory for the specified subsystem.
+func tempDir(t *testing.T, subsystem string) string {
+	path := filepath.Join(t.TempDir(), subsystem)
 	// Ensure the full mock cgroup path exists.
-	err = os.MkdirAll(testCgroupPath, 0755)
-	if err != nil {
+	if err := os.Mkdir(path, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	return &cgroupTestUtil{CgroupData: d, CgroupPath: testCgroupPath, tempDir: tempDir, t: t}
+	return path
 }
 
-func (c *cgroupTestUtil) cleanup() {
-	os.RemoveAll(c.tempDir)
-}
-
-// Write the specified contents on the mock of the specified cgroup files.
-func (c *cgroupTestUtil) writeFileContents(fileContents map[string]string) {
+// writeFileContents writes the specified contents on the mock of the specified
+// cgroup files.
+func writeFileContents(t *testing.T, path string, fileContents map[string]string) {
 	for file, contents := range fileContents {
-		err := fscommon.WriteFile(c.CgroupPath, file, contents)
+		err := cgroups.WriteFile(path, file, contents)
 		if err != nil {
-			c.t.Fatal(err)
+			t.Fatal(err)
 		}
 	}
 }

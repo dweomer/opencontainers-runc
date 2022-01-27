@@ -1,5 +1,3 @@
-// +build linux
-
 package specconv
 
 import (
@@ -139,12 +137,61 @@ func TestCreateHooks(t *testing.T) {
 	if len(poststop) != 4 {
 		t.Error("Expected 4 Poststop hooks")
 	}
-
 }
-func TestSetupSeccomp(t *testing.T) {
+
+func TestSetupSeccompNil(t *testing.T) {
+	seccomp, err := SetupSeccomp(nil)
+	if err != nil {
+		t.Error("Expected error to be nil")
+	}
+
+	if seccomp != nil {
+		t.Error("Expected seccomp to be nil")
+	}
+}
+
+func TestSetupSeccompEmpty(t *testing.T) {
+	conf := &specs.LinuxSeccomp{}
+	seccomp, err := SetupSeccomp(conf)
+	if err != nil {
+		t.Error("Expected error to be nil")
+	}
+
+	if seccomp != nil {
+		t.Error("Expected seccomp to be nil")
+	}
+}
+
+// TestSetupSeccompWrongAction tests that a wrong action triggers an error
+func TestSetupSeccompWrongAction(t *testing.T) {
 	conf := &specs.LinuxSeccomp{
-		DefaultAction: "SCMP_ACT_ERRNO",
-		Architectures: []specs.Arch{specs.ArchX86_64, specs.ArchARM},
+		DefaultAction: "SCMP_ACT_NON_EXIXTENT_ACTION",
+	}
+	_, err := SetupSeccomp(conf)
+	if err == nil {
+		t.Error("Expected error")
+	}
+}
+
+// TestSetupSeccompWrongArchitecture tests that a wrong architecture triggers an error
+func TestSetupSeccompWrongArchitecture(t *testing.T) {
+	conf := &specs.LinuxSeccomp{
+		DefaultAction: "SCMP_ACT_ALLOW",
+		Architectures: []specs.Arch{"SCMP_ARCH_NON_EXISTENT_ARCH"},
+	}
+	_, err := SetupSeccomp(conf)
+	if err == nil {
+		t.Error("Expected error")
+	}
+}
+
+func TestSetupSeccomp(t *testing.T) {
+	errnoRet := uint(55)
+	conf := &specs.LinuxSeccomp{
+		DefaultAction:    "SCMP_ACT_ERRNO",
+		Architectures:    []specs.Arch{specs.ArchX86_64, specs.ArchARM},
+		ListenerPath:     "/var/run/mysocket",
+		ListenerMetadata: "mymetadatastring",
 		Syscalls: []specs.LinuxSyscall{
 			{
 				Names:  []string{"clone"},
@@ -159,26 +206,42 @@ func TestSetupSeccomp(t *testing.T) {
 				},
 			},
 			{
-				Names: []string{
-					"select",
-					"semctl",
-					"semget",
-					"semop",
-					"semtimedop",
-					"send",
-					"sendfile",
-				},
-				Action: "SCMP_ACT_ALLOW",
+				Names:  []string{"semctl"},
+				Action: "SCMP_ACT_KILL",
+			},
+			{
+				Names:  []string{"semget"},
+				Action: "SCMP_ACT_ERRNO",
+			},
+			{
+				Names:    []string{"send"},
+				Action:   "SCMP_ACT_ERRNO",
+				ErrnoRet: &errnoRet,
+			},
+			{
+				Names:  []string{"lchown"},
+				Action: "SCMP_ACT_TRAP",
+			},
+			{
+				Names:  []string{"lremovexattr"},
+				Action: "SCMP_ACT_TRACE",
+			},
+			{
+				Names:  []string{"mbind"},
+				Action: "SCMP_ACT_LOG",
+			},
+			{
+				Names:  []string{"mknod"},
+				Action: "SCMP_ACT_NOTIFY",
 			},
 		},
 	}
 	seccomp, err := SetupSeccomp(conf)
-
 	if err != nil {
 		t.Errorf("Couldn't create Seccomp config: %v", err)
 	}
 
-	if seccomp.DefaultAction != 2 { // SCMP_ACT_ERRNO
+	if seccomp.DefaultAction != configs.Errno {
 		t.Error("Wrong conversion for DefaultAction")
 	}
 
@@ -190,6 +253,14 @@ func TestSetupSeccomp(t *testing.T) {
 		t.Error("Expected architectures are not found")
 	}
 
+	if seccomp.ListenerPath != "/var/run/mysocket" {
+		t.Error("Expected ListenerPath is wrong")
+	}
+
+	if seccomp.ListenerMetadata != "mymetadatastring" {
+		t.Error("Expected ListenerMetadata is wrong")
+	}
+
 	calls := seccomp.Syscalls
 
 	callsLength := len(calls)
@@ -197,24 +268,59 @@ func TestSetupSeccomp(t *testing.T) {
 		t.Errorf("Expected 8 syscalls, got :%d", callsLength)
 	}
 
-	for i, call := range calls {
-		if i == 0 {
+	for _, call := range calls {
+		switch call.Name {
+		case "clone":
+			if call.Action != configs.Allow {
+				t.Error("Wrong conversion for the clone syscall action")
+			}
 			expectedCloneSyscallArgs := configs.Arg{
 				Index:    0,
-				Op:       7, // SCMP_CMP_MASKED_EQ
+				Op:       configs.MaskEqualTo,
 				Value:    unix.CLONE_NEWNS | unix.CLONE_NEWUTS | unix.CLONE_NEWIPC | unix.CLONE_NEWUSER | unix.CLONE_NEWPID | unix.CLONE_NEWNET | unix.CLONE_NEWCGROUP,
 				ValueTwo: 0,
 			}
 			if expectedCloneSyscallArgs != *call.Args[0] {
 				t.Errorf("Wrong arguments conversion for the clone syscall under test")
 			}
+		case "semctl":
+			if call.Action != configs.Kill {
+				t.Errorf("Wrong conversion for the %s syscall action", call.Name)
+			}
+		case "semget":
+			if call.Action != configs.Errno {
+				t.Errorf("Wrong conversion for the %s syscall action", call.Name)
+			}
+			if call.ErrnoRet != nil {
+				t.Errorf("Wrong error ret for the %s syscall", call.Name)
+			}
+		case "send":
+			if call.Action != configs.Errno {
+				t.Errorf("Wrong conversion for the %s syscall action", call.Name)
+			}
+			if *call.ErrnoRet != errnoRet {
+				t.Errorf("Wrong error ret for the %s syscall", call.Name)
+			}
+		case "lchown":
+			if call.Action != configs.Trap {
+				t.Errorf("Wrong conversion for the %s syscall action", call.Name)
+			}
+		case "lremovexattr":
+			if call.Action != configs.Trace {
+				t.Errorf("Wrong conversion for the %s syscall action", call.Name)
+			}
+		case "mbind":
+			if call.Action != configs.Log {
+				t.Errorf("Wrong conversion for the %s syscall action", call.Name)
+			}
+		case "mknod":
+			if call.Action != configs.Notify {
+				t.Errorf("Wrong conversion for the %s syscall action", call.Name)
+			}
+		default:
+			t.Errorf("Unexpected syscall %s found", call.Name)
 		}
-		if call.Action != 4 {
-			t.Error("Wrong conversion for the clone syscall action")
-		}
-
 	}
-
 }
 
 func TestLinuxCgroupWithMemoryResource(t *testing.T) {
@@ -298,7 +404,6 @@ func TestLinuxCgroupSystemd(t *testing.T) {
 	}
 
 	cgroup, err := CreateCgroupConfig(opts, nil)
-
 	if err != nil {
 		t.Errorf("Couldn't create Cgroup config: %v", err)
 	}
@@ -334,7 +439,6 @@ func TestLinuxCgroupSystemdWithEmptyPath(t *testing.T) {
 	}
 
 	cgroup, err := CreateCgroupConfig(opts, nil)
-
 	if err != nil {
 		t.Errorf("Couldn't create Cgroup config: %v", err)
 	}
@@ -373,6 +477,7 @@ func TestLinuxCgroupSystemdWithInvalidPath(t *testing.T) {
 		t.Error("Expected to produce an error if not using the correct format for cgroup paths belonging to systemd")
 	}
 }
+
 func TestLinuxCgroupsPathSpecified(t *testing.T) {
 	cgroupsPath := "/user/cgroups/path/id"
 
@@ -441,6 +546,28 @@ func TestSpecconvExampleValidate(t *testing.T) {
 	}
 }
 
+func TestSpecconvNoLinuxSection(t *testing.T) {
+	spec := Example()
+	spec.Root.Path = "/"
+	spec.Linux = nil
+	spec.Hostname = ""
+
+	opts := &CreateOpts{
+		CgroupName: "ContainerID",
+		Spec:       spec,
+	}
+
+	config, err := CreateLibcontainerConfig(opts)
+	if err != nil {
+		t.Errorf("Couldn't create libcontainer config: %v", err)
+	}
+
+	validator := validate.New()
+	if err := validator.Validate(config); err != nil {
+		t.Errorf("Expected specconv to produce valid container config: %v", err)
+	}
+}
+
 func TestDupNamespaces(t *testing.T) {
 	spec := &specs.Spec{
 		Root: &specs.Root{
@@ -470,7 +597,7 @@ func TestDupNamespaces(t *testing.T) {
 
 func TestNonZeroEUIDCompatibleSpecconvValidate(t *testing.T) {
 	if _, err := os.Stat("/proc/self/ns/user"); os.IsNotExist(err) {
-		t.Skip("userns is unsupported")
+		t.Skip("Test requires userns.")
 	}
 
 	spec := Example()
@@ -571,6 +698,11 @@ func TestInitSystemdProps(t *testing.T) {
 			exp:  expT{true, "", ""},
 		},
 		{
+			desc: "convert USec to Sec (bad variable name, no conversion)",
+			in:   inT{"org.systemd.property.FOOSec", "123"},
+			exp:  expT{false, "FOOSec", 123},
+		},
+		{
 			in:  inT{"org.systemd.property.CollectMode", "'inactive-or-failed'"},
 			exp: expT{false, "CollectMode", "inactive-or-failed"},
 		},
@@ -603,7 +735,7 @@ func TestInitSystemdProps(t *testing.T) {
 		spec.Annotations = map[string]string{tc.in.name: tc.in.value}
 
 		outMap, err := initSystemdProps(spec)
-		//t.Logf("input %+v, expected %+v, got err:%v out:%+v", tc.in, tc.exp, err, outMap)
+		// t.Logf("input %+v, expected %+v, got err:%v out:%+v", tc.in, tc.exp, err, outMap)
 
 		if tc.exp.isErr != (err != nil) {
 			t.Errorf("input %+v, expecting error: %v, got %v", tc.in, tc.exp.isErr, err)
@@ -630,6 +762,39 @@ func TestInitSystemdProps(t *testing.T) {
 	}
 }
 
+func TestIsValidName(t *testing.T) {
+	testCases := []struct {
+		in    string
+		valid bool
+	}{
+		{"", false},   // too short
+		{"xx", false}, // too short
+		{"xxx", true},
+		{"someValidName", true},
+		{"A name", false},  // space
+		{"3335", false},    // numbers
+		{"Name1", false},   // numbers
+		{"Кир", false},     // non-ascii
+		{"მადლობა", false}, // non-ascii
+		{"合い言葉", false},    // non-ascii
+	}
+
+	for _, tc := range testCases {
+		err := checkPropertyName(tc.in)
+		if (err == nil) != tc.valid {
+			t.Errorf("case %q: expected valid: %v, got error: %v", tc.in, tc.valid, err)
+		}
+	}
+}
+
+func BenchmarkIsValidName(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		for _, s := range []string{"", "xx", "xxx", "someValidName", "A name", "Кир", "მადლობა", "合い言葉"} {
+			_ = checkPropertyName(s)
+		}
+	}
+}
+
 func TestNullProcess(t *testing.T) {
 	spec := Example()
 	spec.Process = nil
@@ -637,7 +802,6 @@ func TestNullProcess(t *testing.T) {
 	_, err := CreateLibcontainerConfig(&CreateOpts{
 		Spec: spec,
 	})
-
 	if err != nil {
 		t.Errorf("Null process should be forbidden")
 	}
@@ -650,7 +814,7 @@ func TestCreateDevices(t *testing.T) {
 	// preferred the spec's device over the redundant default device
 	ttyUid := uint32(1000)
 	ttyGid := uint32(1000)
-	fm := os.FileMode(0666)
+	fm := os.FileMode(0o666)
 
 	spec.Linux = &specs.Linux{
 		Devices: []specs.LinuxDevice{
@@ -718,7 +882,7 @@ func TestCreateDevices(t *testing.T) {
 		if configDev.Path == "/dev/tty" {
 			wantDev := &devices.Device{
 				Path:     "/dev/tty",
-				FileMode: 0666,
+				FileMode: 0o666,
 				Uid:      1000,
 				Gid:      1000,
 				Rule: devices.Rule{

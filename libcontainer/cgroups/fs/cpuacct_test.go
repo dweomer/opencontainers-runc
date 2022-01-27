@@ -1,5 +1,3 @@
-// +build linux
-
 package fs
 
 import (
@@ -26,9 +24,8 @@ const (
 )
 
 func TestCpuacctStats(t *testing.T) {
-	helper := NewCgroupTestUtil("cpuacct.", t)
-	defer helper.cleanup()
-	helper.writeFileContents(map[string]string{
+	path := tempDir(t, "cpuacct")
+	writeFileContents(t, path, map[string]string{
 		"cpuacct.usage":        cpuAcctUsageContents,
 		"cpuacct.usage_percpu": cpuAcctUsagePerCPUContents,
 		"cpuacct.stat":         cpuAcctStatContents,
@@ -37,19 +34,25 @@ func TestCpuacctStats(t *testing.T) {
 
 	cpuacct := &CpuacctGroup{}
 	actualStats := *cgroups.NewStats()
-	err := cpuacct.GetStats(helper.CgroupPath, &actualStats)
+	err := cpuacct.GetStats(path, &actualStats)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	expectedStats := cgroups.CpuUsage{
 		TotalUsage: uint64(12262454190222160),
-		PercpuUsage: []uint64{1564936537989058, 1583937096487821, 1604195415465681, 1596445226820187,
-			1481069084155629, 1478735613864327, 1477610593414743, 1476362015778086},
-		PercpuUsageInKernelmode: []uint64{637727786389114, 638197595421064, 638956774598358, 637985531181620,
-			638837766495476, 638763309884944, 640081778921247, 638716766259495},
-		PercpuUsageInUsermode: []uint64{962250696038415, 981956408513304, 1002658817529022, 994937703492523,
-			874843781648690, 872544369885276, 870104915696359, 870202363887496},
+		PercpuUsage: []uint64{
+			1564936537989058, 1583937096487821, 1604195415465681, 1596445226820187,
+			1481069084155629, 1478735613864327, 1477610593414743, 1476362015778086,
+		},
+		PercpuUsageInKernelmode: []uint64{
+			637727786389114, 638197595421064, 638956774598358, 637985531181620,
+			638837766495476, 638763309884944, 640081778921247, 638716766259495,
+		},
+		PercpuUsageInUsermode: []uint64{
+			962250696038415, 981956408513304, 1002658817529022, 994937703492523,
+			874843781648690, 872544369885276, 870104915696359, 870202363887496,
+		},
 		UsageInKernelmode: (uint64(291429664) * nanosecondsInSecond) / clockTicks,
 		UsageInUsermode:   (uint64(452278264) * nanosecondsInSecond) / clockTicks,
 	}
@@ -61,9 +64,8 @@ func TestCpuacctStats(t *testing.T) {
 }
 
 func TestCpuacctStatsWithoutUsageAll(t *testing.T) {
-	helper := NewCgroupTestUtil("cpuacct.", t)
-	defer helper.cleanup()
-	helper.writeFileContents(map[string]string{
+	path := tempDir(t, "cpuacct")
+	writeFileContents(t, path, map[string]string{
 		"cpuacct.usage":        cpuAcctUsageContents,
 		"cpuacct.usage_percpu": cpuAcctUsagePerCPUContents,
 		"cpuacct.stat":         cpuAcctStatContents,
@@ -71,15 +73,17 @@ func TestCpuacctStatsWithoutUsageAll(t *testing.T) {
 
 	cpuacct := &CpuacctGroup{}
 	actualStats := *cgroups.NewStats()
-	err := cpuacct.GetStats(helper.CgroupPath, &actualStats)
+	err := cpuacct.GetStats(path, &actualStats)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	expectedStats := cgroups.CpuUsage{
 		TotalUsage: uint64(12262454190222160),
-		PercpuUsage: []uint64{1564936537989058, 1583937096487821, 1604195415465681, 1596445226820187,
-			1481069084155629, 1478735613864327, 1477610593414743, 1476362015778086},
+		PercpuUsage: []uint64{
+			1564936537989058, 1583937096487821, 1604195415465681, 1596445226820187,
+			1481069084155629, 1478735613864327, 1477610593414743, 1476362015778086,
+		},
 		PercpuUsageInKernelmode: []uint64{},
 		PercpuUsageInUsermode:   []uint64{},
 		UsageInKernelmode:       (uint64(291429664) * nanosecondsInSecond) / clockTicks,
