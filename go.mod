@@ -7,7 +7,7 @@ require (
 	github.com/cilium/ebpf v0.5.0
 	github.com/containerd/console v1.0.2
 	github.com/coreos/go-systemd/v22 v22.3.1
-	github.com/cyphar/filepath-securejoin v0.2.2
+	github.com/cyphar/filepath-securejoin v0.2.4
 	github.com/docker/go-units v0.4.0
 	github.com/godbus/dbus/v5 v5.0.4
 	github.com/moby/sys/mountinfo v0.4.1
@@ -23,6 +23,6 @@ require (
 	github.com/vishvananda/netlink v1.1.0
 	github.com/willf/bitset v1.1.11
 	golang.org/x/net v0.0.0-20201224014010-6772e930b67b
-	golang.org/x/sys v0.0.0-20210124154548-22da62e12c0c
-	google.golang.org/protobuf v1.25.0
+	golang.org/x/sys v0.1.0
+	google.golang.org/protobuf v1.33.0
 )
